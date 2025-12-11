@@ -13,6 +13,12 @@
 
 </div>
 
+<div align="center">
+
+![PayU Sensei Landing](landing.png)
+
+</div>
+
 ---
 
 ## 🎯 Overview
