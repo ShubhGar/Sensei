@@ -121,6 +121,10 @@ export const aiAPI = {
       conversation_context: conversationContext,
       tone
     }),
+  generateJiraContent: (sourceType, content) =>
+    api.post('/api/ai/generate-jira-content', content, {
+      params: { source_type: sourceType }
+    }),
   convertToJira: (text, issueType = 'Task') =>
     api.post('/api/ai/convert/jira', null, {
       params: { text, issue_type: issueType }

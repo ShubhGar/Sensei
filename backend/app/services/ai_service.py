@@ -1966,6 +1966,76 @@ Return JSON:
                 "confidence": 0.0
             }
     
+    async def generate_jira_content(
+        self,
+        source_type: str,
+        content: Dict[str, Any]
+    ) -> str:
+        """Generate AI-formatted content optimized for JIRA conversion from email or message"""
+        if not self.provider_manager.has_any_provider():
+            # Fallback: return basic formatted text
+            if source_type == "email":
+                return f"Subject: {content.get('subject', 'No Subject')}\n\nFrom: {content.get('sender', 'Unknown')}\n\n{content.get('body_preview', content.get('content', ''))}"
+            else:  # teams message
+                return f"From: {content.get('sender', 'Unknown')}\n\n{content.get('content', '')}"
+        
+        if source_type == "email":
+            prompt = f"""Transform the following email into a well-structured text format optimized for JIRA issue creation. 
+Extract key information, action items, requirements, and context. Format it clearly with:
+- Clear subject/title
+- Key points and requirements
+- Action items (if any)
+- Priority indicators
+- Relevant context
+
+Email Subject: {content.get('subject', 'No Subject')}
+From: {content.get('sender', 'Unknown')}
+Date: {content.get('received_at', 'Unknown')}
+Content: {content.get('body_preview', content.get('content', ''))}
+Summary: {content.get('summary', '') if content.get('summary') else 'N/A'}
+Urgency: {'Urgent' if content.get('is_urgent') else 'Normal'}
+Importance: {content.get('importance', 'Normal')}
+
+Generate a clear, structured text that captures all essential information for creating a JIRA issue."""
+        else:  # teams message
+            prompt = f"""Transform the following Teams message into a well-structured text format optimized for JIRA issue creation.
+Extract key information, action items, requirements, and context. Format it clearly with:
+- Clear topic/title
+- Key points and requirements
+- Action items (if any)
+- Priority indicators
+- Relevant context
+
+From: {content.get('sender', 'Unknown')}
+Channel: {content.get('channel_id', 'N/A')}
+Date: {content.get('sent_at', 'Unknown')}
+Content: {content.get('content', '')}
+Summary: {content.get('summary', '') if content.get('summary') else 'N/A'}
+Urgent: {'Yes' if content.get('is_urgent') else 'No'}
+
+Generate a clear, structured text that captures all essential information for creating a JIRA issue."""
+
+        system_prompt = "You are an expert at extracting and formatting information from communications into structured text optimized for project management tools like JIRA."
+
+        try:
+            formatted_content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=1024
+            )
+            return formatted_content.strip()
+        except Exception as e:
+            logger.error(
+                f"Error generating JIRA content | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            # Fallback to basic formatting
+            if source_type == "email":
+                return f"Subject: {content.get('subject', 'No Subject')}\n\nFrom: {content.get('sender', 'Unknown')}\n\n{content.get('body_preview', content.get('content', ''))}"
+            else:
+                return f"From: {content.get('sender', 'Unknown')}\n\n{content.get('content', '')}"
+
     async def convert_to_jira(
         self,
         text: str,

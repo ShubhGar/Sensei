@@ -36,8 +36,10 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline'
 import EmailIcon from '@mui/icons-material/Email'
 import { teamsAPI, authAPI, aiAPI } from '../services/api'
 import SendIcon from '@mui/icons-material/Send'
+import CodeIcon from '@mui/icons-material/Code'
 import { useTheme } from '../ThemeContext'
 import ContextMenu from './ContextMenu'
+import JiraConversionDialog from './JiraConversionDialog'
 
 const TeamsView = () => {
   const navigate = useNavigate()
@@ -63,6 +65,8 @@ const TeamsView = () => {
   const [sendMessageDialog, setSendMessageDialog] = useState({ open: false, messageData: null })
   const [sendingMessage, setSendingMessage] = useState(false)
   const [sendMessageError, setSendMessageError] = useState(null)
+  const [jiraDialogOpen, setJiraDialogOpen] = useState(false)
+  const [jiraDialogText, setJiraDialogText] = useState('')
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -249,6 +253,30 @@ const TeamsView = () => {
         content: suggestedResponse.suggested_response
       }
     })
+  }
+
+  const handleConvertToJira = (message) => {
+    // Generate pre-populated text from message content
+    let textToConvert = ''
+    if (message.sender) {
+      textToConvert += `From: ${message.sender}\n`
+    }
+    if (message.sent_at) {
+      textToConvert += `Date: ${new Date(message.sent_at).toLocaleString()}\n`
+    }
+    if (message.channel_id) {
+      textToConvert += `Channel: ${message.channel_id}\n`
+    }
+    textToConvert += '\n'
+    if (message.content) {
+      textToConvert += message.content
+    }
+    if (message.summary) {
+      textToConvert += `\n\nSummary: ${message.summary}`
+    }
+    
+    setJiraDialogText(textToConvert)
+    setJiraDialogOpen(true)
   }
 
   return (
@@ -755,6 +783,18 @@ const TeamsView = () => {
                           >
                             Suggest Response
                           </Button>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color="secondary"
+                            startIcon={<CodeIcon />}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleConvertToJira(message)
+                            }}
+                          >
+                            Convert to JIRA
+                          </Button>
                         </Box>
                       </Box>
                     }
@@ -1037,6 +1077,16 @@ const TeamsView = () => {
         onClose={handleCloseContextMenu}
         data={contextMenu.data}
         sourceType="teams"
+      />
+
+      {/* JIRA Conversion Dialog */}
+      <JiraConversionDialog
+        open={jiraDialogOpen}
+        onClose={() => {
+          setJiraDialogOpen(false)
+          setJiraDialogText('')
+        }}
+        initialText={jiraDialogText}
       />
     </Box>
   )

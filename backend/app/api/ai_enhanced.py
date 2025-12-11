@@ -7,6 +7,7 @@ from sqlalchemy import select
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import logging
+import os
 
 from app.models.schemas import (
     MeetingInsights, EmailCategorization, ChatMessage, ChatResponse,
@@ -628,6 +629,20 @@ async def suggest_teams_response(
         raise HTTPException(status_code=500, detail=f"Error suggesting response: {str(e)}")
 
 
+@router.post("/generate-jira-content")
+async def generate_jira_content(
+    source_type: str = Query(..., description="Source type: 'email' or 'teams'"),
+    content: Dict[str, Any] = Body(..., description="Email or message content")
+):
+    """Generate AI-formatted content optimized for JIRA conversion"""
+    try:
+        formatted_content = await ai_service.generate_jira_content(source_type, content)
+        return {"content": formatted_content}
+    except Exception as e:
+        logger.error(f"Error generating JIRA content: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating JIRA content: {str(e)}")
+
+
 @router.post("/convert/jira", response_model=JiraIssue)
 async def convert_to_jira(
     text: str = Query(..., description="Text to convert"),
@@ -635,7 +650,12 @@ async def convert_to_jira(
 ):
     """Convert text into Jira issue format"""
     try:
+        # Get JIRA API key from environment variables
+        jira_api_key = os.getenv("JIRA_API_KEY", "XYZ")
+        
         jira_issue = await ai_service.convert_to_jira(text, issue_type)
+        # Store API key for potential future JIRA integration
+        # The API key is available in jira_api_key variable if needed
         return JiraIssue(**jira_issue)
     except Exception as e:
         logger.error(f"Error converting to Jira: {e}", exc_info=True)

@@ -43,8 +43,10 @@ import MarkEmailUnreadIcon from '@mui/icons-material/MarkEmailUnread'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import { emailAPI, authAPI } from '../services/api'
 import SendIcon from '@mui/icons-material/Send'
+import CodeIcon from '@mui/icons-material/Code'
 import { useTheme } from '../ThemeContext'
 import ContextMenu from './ContextMenu'
+import JiraConversionDialog from './JiraConversionDialog'
 
 const EmailView = () => {
   const navigate = useNavigate()
@@ -70,6 +72,9 @@ const EmailView = () => {
   const [sendEmailDialog, setSendEmailDialog] = useState({ open: false, emailData: null })
   const [sendingEmail, setSendingEmail] = useState(false)
   const [sendEmailError, setSendEmailError] = useState(null)
+  const [jiraDialogOpen, setJiraDialogOpen] = useState(false)
+  const [jiraDialogText, setJiraDialogText] = useState('')
+  const [generatingJiraContent, setGeneratingJiraContent] = useState(false)
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -344,6 +349,50 @@ const EmailView = () => {
         importance: 'normal'
       }
     })
+  }
+
+  const handleConvertToJira = async (email) => {
+    setGeneratingJiraContent(true)
+    setError(null)
+    
+    try {
+      // Generate AI-formatted content optimized for JIRA
+      const response = await aiAPI.generateJiraContent('email', {
+        subject: email.subject || '(No Subject)',
+        sender: email.sender || 'Unknown',
+        sender_email: email.sender_email,
+        received_at: email.received_at,
+        body_preview: email.body_preview || '',
+        content: email.body_preview || '',
+        summary: email.summary || '',
+        is_urgent: email.is_urgent || false,
+        importance: email.importance || 'normal'
+      })
+      
+      setJiraDialogText(response.data.content)
+      setJiraDialogOpen(true)
+    } catch (err) {
+      setError('Failed to generate JIRA content: ' + (err.response?.data?.detail || err.message))
+      // Fallback to basic formatting if AI generation fails
+      let textToConvert = `Subject: ${email.subject || '(No Subject)'}\n\n`
+      if (email.sender) {
+        textToConvert += `From: ${email.sender}${email.sender_email ? ` <${email.sender_email}>` : ''}\n`
+      }
+      if (email.received_at) {
+        textToConvert += `Date: ${new Date(email.received_at).toLocaleString()}\n`
+      }
+      textToConvert += '\n'
+      if (email.body_preview) {
+        textToConvert += email.body_preview
+      }
+      if (email.summary) {
+        textToConvert += `\n\nSummary: ${email.summary}`
+      }
+      setJiraDialogText(textToConvert)
+      setJiraDialogOpen(true)
+    } finally {
+      setGeneratingJiraContent(false)
+    }
   }
 
   return (
@@ -1048,6 +1097,19 @@ const EmailView = () => {
                                   >
                                     {generatingTodos.has(email.id) ? 'Generating...' : 'Generate Todos'}
                                   </Button>
+                                  <Button
+                                    size="small"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleConvertToJira(email)
+                                    }}
+                                    variant="outlined"
+                                    color="secondary"
+                                    disabled={generatingJiraContent}
+                                    startIcon={generatingJiraContent ? <CircularProgress size={16} /> : <CodeIcon />}
+                                  >
+                                    {generatingJiraContent ? 'Generating...' : 'Convert to JIRA'}
+                                  </Button>
                                 </Box>
                               </Box>
                             </Collapse>
@@ -1277,6 +1339,16 @@ const EmailView = () => {
         onClose={handleCloseContextMenu}
         data={contextMenu.data}
         sourceType="email"
+      />
+
+      {/* JIRA Conversion Dialog */}
+      <JiraConversionDialog
+        open={jiraDialogOpen}
+        onClose={() => {
+          setJiraDialogOpen(false)
+          setJiraDialogText('')
+        }}
+        initialText={jiraDialogText}
       />
     </Box>
   )

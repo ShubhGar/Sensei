@@ -32,7 +32,6 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
 import { transcriptionAPI, aiAPI, emailAPI, teamsAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
 import ContextMenu from './ContextMenu'
-import UtilityTools from './UtilityTools'
 
 const Home = () => {
   const navigate = useNavigate()
@@ -49,7 +48,6 @@ const Home = () => {
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false)
   const [loadingMeetings, setLoadingMeetings] = useState(false)
   const [contextMenu, setContextMenu] = useState({ open: false, anchorEl: null, data: null })
-  const [utilityToolsOpen, setUtilityToolsOpen] = useState(false)
   
   // Theme-aware card background values
   const cardBackground = mode === 'dark' 
@@ -884,32 +882,6 @@ const Home = () => {
           </Grid>
         )}
       </Grid>
-
-
-      {/* Utility Tools Button */}
-      <Box sx={{ mt: 4, textAlign: 'center' }}>
-        <Button
-          variant="outlined"
-          size="large"
-          onClick={() => setUtilityToolsOpen(true)}
-          sx={{
-            px: 4,
-            py: 1.5,
-            fontSize: '1rem',
-            fontWeight: 600,
-            textTransform: 'none',
-            borderRadius: 2,
-          }}
-        >
-          Open Utility Tools (Jira/Confluence/Tone Optimizer)
-        </Button>
-      </Box>
-
-      {/* Utility Tools Dialog */}
-      <UtilityTools
-        open={utilityToolsOpen}
-        onClose={() => setUtilityToolsOpen(false)}
-      />
 
       {/* Meeting Details Dialog */}
       <Dialog
