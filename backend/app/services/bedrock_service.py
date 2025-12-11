@@ -3,6 +3,7 @@ AWS Bedrock service for AI-powered processing
 """
 import os
 import json
+import asyncio
 import boto3
 from typing import Dict, Any, Optional
 from botocore.exceptions import ClientError
@@ -80,7 +81,22 @@ class BedrockService:
             )
             
             response_body = json.loads(response['body'].read())
+            
+            # Validate response structure
+            if 'content' not in response_body:
+                raise Exception(f"Invalid Bedrock response: missing 'content' field | Response: {response_body}")
+            if not response_body['content'] or len(response_body['content']) == 0:
+                raise Exception(f"Invalid Bedrock response: empty 'content' array | Response: {response_body}")
+            if 'text' not in response_body['content'][0]:
+                raise Exception(f"Invalid Bedrock response: missing 'text' field | Response: {response_body}")
+            
             return response_body['content'][0]['text']
+        except (KeyError, IndexError) as e:
+            logger.error(
+                f"Bedrock response parsing error | Model: {self.model_id} | "
+                f"Error: {type(e).__name__}: {str(e)} | Operation: invoke_claude"
+            )
+            raise Exception(f"Failed to parse Bedrock response: {str(e)}")
         except ClientError as e:
             error_code = e.response['Error']['Code']
             error_message = e.response['Error']['Message']
@@ -89,6 +105,12 @@ class BedrockService:
                 f"Message: {error_message} | Operation: invoke_claude"
             )
             raise Exception(f"Bedrock API error ({error_code}): {error_message}")
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"Bedrock JSON decode error | Model: {self.model_id} | "
+                f"Error: {str(e)} | Operation: invoke_claude"
+            )
+            raise Exception(f"Failed to decode Bedrock response as JSON: {str(e)}")
     
     def _invoke_llama(self, prompt: str, system_prompt: Optional[str] = None,
                      temperature: float = 0.3, max_tokens: int = 4096) -> str:
@@ -116,7 +138,18 @@ class BedrockService:
             )
             
             response_body = json.loads(response['body'].read())
+            
+            # Validate response structure
+            if 'generation' not in response_body:
+                raise Exception(f"Invalid Bedrock response: missing 'generation' field | Response: {response_body}")
+            
             return response_body['generation']
+        except (KeyError, IndexError) as e:
+            logger.error(
+                f"Bedrock response parsing error | Model: {self.model_id} | "
+                f"Error: {type(e).__name__}: {str(e)} | Operation: invoke_llama"
+            )
+            raise Exception(f"Failed to parse Bedrock response: {str(e)}")
         except ClientError as e:
             error_code = e.response['Error']['Code']
             error_message = e.response['Error']['Message']
@@ -125,6 +158,12 @@ class BedrockService:
                 f"Message: {error_message} | Operation: invoke_llama"
             )
             raise Exception(f"Bedrock API error ({error_code}): {error_message}")
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"Bedrock JSON decode error | Model: {self.model_id} | "
+                f"Error: {str(e)} | Operation: invoke_llama"
+            )
+            raise Exception(f"Failed to decode Bedrock response as JSON: {str(e)}")
     
     async def generate_text(
         self,
@@ -139,17 +178,24 @@ class BedrockService:
             raise Exception("Bedrock client not initialized")
         
         # Determine model type and invoke accordingly
+        # Run blocking boto3 calls in thread pool to avoid blocking event loop
         model_type = None
         if "claude" in self.model_id.lower():
             model_type = "claude"
-            response = self._invoke_claude(prompt, system_prompt, temperature, max_tokens)
+            response = await asyncio.to_thread(
+                self._invoke_claude, prompt, system_prompt, temperature, max_tokens
+            )
         elif "llama" in self.model_id.lower():
             model_type = "llama"
-            response = self._invoke_llama(prompt, system_prompt, temperature, max_tokens)
+            response = await asyncio.to_thread(
+                self._invoke_llama, prompt, system_prompt, temperature, max_tokens
+            )
         else:
             # Default to Claude format
             model_type = "claude (default)"
-            response = self._invoke_claude(prompt, system_prompt, temperature, max_tokens)
+            response = await asyncio.to_thread(
+                self._invoke_claude, prompt, system_prompt, temperature, max_tokens
+            )
         
         logger.debug(
             f"Bedrock text generation | Model: {self.model_id} | Type: {model_type} | "

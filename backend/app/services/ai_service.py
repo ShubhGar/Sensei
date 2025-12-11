@@ -3,78 +3,50 @@ AI service for summarization, MOM generation, and insights
 """
 import os
 from typing import List, Optional, Dict, Any
-from openai import OpenAI
 from dotenv import load_dotenv
 import json
 import asyncio
 import re
 from app.utils.logger import get_logger
-
-logger = get_logger(__name__)
-
-# Try to import OpenAI exceptions (may vary by SDK version)
-try:
-    from openai import APIError, RateLimitError
-except ImportError:
-    try:
-        from openai.error import APIError, RateLimitError
-    except ImportError:
-        # Fallback: define placeholder classes if not available
-        class APIError(Exception):
-            pass
-        class RateLimitError(APIError):
-            pass
+from app.services.ai_provider_manager import AIProviderManager
 
 load_dotenv()
-
-# Import BedrockService conditionally to avoid errors if boto3 is not installed
-try:
-    from app.services.bedrock_service import BedrockService
-    BEDROCK_AVAILABLE = True
-except ImportError:
-    BEDROCK_AVAILABLE = False
-    BedrockService = None
+logger = get_logger(__name__)
 
 
 class AIService:
     """Service for AI-powered processing"""
     
-    def __init__(self):
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
-        self.fallback_model = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-3.5-turbo")
-        self.use_bedrock = os.getenv("USE_BEDROCK", "false").lower() == "true"
+    def __init__(
+        self,
+        use_bedrock: Optional[bool] = None,
+        enable_openai: Optional[bool] = None,
+        enable_bedrock: Optional[bool] = None
+    ):
+        """
+        Initialize AI Service
         
-        # Warn if using deprecated model
-        if "turbo-preview" in self.model.lower():
-            logger.warning(
-                f"Deprecated model detected | Model: {self.model} | "
-                f"Action: Update OPENAI_MODEL to 'gpt-4o' or 'gpt-4-turbo' in .env file"
-            )
+        Args:
+            use_bedrock: Primary provider preference (True=Bedrock, False=OpenAI, None=auto from env)
+            enable_openai: Enable/disable OpenAI service (None=auto from env, can be set to False to disable)
+            enable_bedrock: Enable/disable Bedrock service (None=auto from env, can be set to False to disable)
+        """
+        # Initialize provider manager
+        self.provider_manager = AIProviderManager(
+            use_bedrock=use_bedrock,
+            enable_openai=enable_openai,
+            enable_bedrock=enable_bedrock
+        )
         
-        # Initialize clients
-        # Always initialize OpenAI client if API key is available (for fallback)
-        self.client = OpenAI(api_key=self.api_key) if self.api_key else None
+        # Expose provider info for backward compatibility
+        self.use_bedrock = self.provider_manager.use_bedrock
+        self.openai_service = self.provider_manager.openai_service
+        self.bedrock_service = self.provider_manager.bedrock_service
         
-        if self.use_bedrock and BEDROCK_AVAILABLE:
-            self.bedrock_service = BedrockService()
-            bedrock_model = getattr(self.bedrock_service, 'model_id', 'unknown')
-            logger.info(
-                f"AI service initialized | Provider: AWS Bedrock | Model: {bedrock_model} | "
-                f"Fallback: OpenAI enabled"
-            )
-        else:
-            self.bedrock_service = None
-            if self.use_bedrock and not BEDROCK_AVAILABLE:
-                logger.warning(
-                    "Bedrock requested but unavailable | USE_BEDROCK=true but boto3 not installed | "
-                    "Falling back to OpenAI"
-                )
-            else:
-                logger.info(
-                    f"AI service initialized | Provider: OpenAI | Model: {self.model} | "
-                    f"Fallback model: {self.fallback_model}"
-                )
+        # For backward compatibility with existing code
+        self.client = self.openai_service.client if self.openai_service else None
+        self.model = self.openai_service.model if self.openai_service else None
+        self.fallback_model = self.openai_service.fallback_model if self.openai_service else None
     
     async def _call_ai(
         self,
@@ -84,216 +56,14 @@ class AIService:
         max_tokens: int = 4096,
         response_format: Optional[Dict] = None
     ) -> str:
-        """Unified async method to call either OpenAI or Bedrock"""
-        if self.use_bedrock and self.bedrock_service:
-            # Use Bedrock with fallback to OpenAI on permission errors
-            try:
-                return await self.bedrock_service.generate_text(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    response_format=response_format
-                )
-            except Exception as e:
-                error_msg = str(e)
-                # Check if it's an access/permission error
-                if "AccessDeniedException" in error_msg or "not authorized" in error_msg.lower() or "Marketplace" in error_msg:
-                    logger.warning(
-                        f"Bedrock access denied, falling back to OpenAI | Error: {error_msg} | "
-                        f"Error type: {type(e).__name__}"
-                    )
-                    if self.client:
-                        # Fall back to OpenAI
-                        messages = [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt}
-                        ]
-                        params = {
-                            "model": self.model,
-                            "messages": messages,
-                            "temperature": temperature,
-                        }
-                        if max_tokens:
-                            params["max_tokens"] = max_tokens
-                        if response_format:
-                            params["response_format"] = response_format
-                        
-                        try:
-                            response = self.client.chat.completions.create(**params)
-                            return response.choices[0].message.content
-                        except (RateLimitError, APIError) as openai_error:
-                            error_msg_openai = str(openai_error)
-                            error_code = getattr(openai_error, 'status_code', None) or getattr(openai_error, 'code', None)
-                            
-                            # Check if it's a quota/billing error (429 with insufficient_quota)
-                            if "insufficient_quota" in error_msg_openai.lower() or "quota" in error_msg_openai.lower() or "billing" in error_msg_openai.lower():
-                                raise Exception(f"OpenAI quota exceeded. Please check your OpenAI billing and plan details. You may need to add credits or upgrade your plan. Error: {error_msg_openai}")
-                            
-                            # Check if it's a rate limit error (429)
-                            if isinstance(openai_error, RateLimitError) or (error_code == 429) or "429" in error_msg_openai or "rate limit" in error_msg_openai.lower():
-                                raise Exception(f"OpenAI rate limit exceeded. Please wait a moment and try again. Error: {error_msg_openai}")
-                            
-                            # Check if it's a model not found error (404)
-                            if (error_code == 404) or "404" in error_msg_openai or "model_not_found" in error_msg_openai.lower() or "does not exist" in error_msg_openai.lower():
-                                logger.warning(
-                                    f"OpenAI model not found | Primary model: {self.model} | "
-                                    f"Trying fallback: {self.fallback_model} | Error: {error_msg_openai}"
-                                )
-                                # Try with fallback model
-                                if self.model != self.fallback_model:
-                                    params["model"] = self.fallback_model
-                                    try:
-                                        response = self.client.chat.completions.create(**params)
-                                        return response.choices[0].message.content
-                                    except (RateLimitError, APIError) as fallback_error:
-                                        fallback_code = getattr(fallback_error, 'status_code', None) or getattr(fallback_error, 'code', None)
-                                        fallback_msg = str(fallback_error)
-                                        if "insufficient_quota" in fallback_msg.lower() or "quota" in fallback_msg.lower() or "billing" in fallback_msg.lower():
-                                            raise Exception(f"OpenAI quota exceeded on fallback model. Please check your OpenAI billing and plan details.")
-                                        if isinstance(fallback_error, RateLimitError) or (fallback_code == 429):
-                                            raise Exception(f"OpenAI rate limit exceeded on fallback model. Please wait and try again.")
-                                        raise Exception(f"Bedrock access denied and both OpenAI models failed: {fallback_msg}")
-                                    except Exception as fallback_error:
-                                        raise Exception(f"Bedrock access denied and both OpenAI models failed: {str(fallback_error)}")
-                                else:
-                                    raise Exception(f"Bedrock access denied and OpenAI model not found: {error_msg}")
-                            else:
-                                raise Exception(f"Bedrock access denied and OpenAI error: {openai_error}")
-                        except Exception as openai_error:
-                            error_msg_openai = str(openai_error)
-                            # Check if it's a quota/billing error first
-                            if "insufficient_quota" in error_msg_openai.lower() or ("quota" in error_msg_openai.lower() and "429" in error_msg_openai) or "billing" in error_msg_openai.lower():
-                                raise Exception(f"OpenAI quota exceeded. Please check your OpenAI billing and plan details. You may need to add credits or upgrade your plan. Error: {error_msg_openai}")
-                            # Check for rate limit in generic exception
-                            if "429" in error_msg_openai or "rate limit" in error_msg_openai.lower() or "too many requests" in error_msg_openai.lower():
-                                raise Exception(f"OpenAI rate limit exceeded. Please wait a moment and try again. Error: {error_msg_openai}")
-                            # Check if it's a model not found error (404)
-                            if "404" in error_msg_openai or "model_not_found" in error_msg_openai.lower() or "does not exist" in error_msg_openai.lower():
-                                logger.warning(
-                                    f"OpenAI model not found | Primary model: {self.model} | "
-                                    f"Trying fallback: {self.fallback_model} | Error: {error_msg_openai}"
-                                )
-                                # Try with fallback model
-                                if self.model != self.fallback_model:
-                                    params["model"] = self.fallback_model
-                                    try:
-                                        response = self.client.chat.completions.create(**params)
-                                        return response.choices[0].message.content
-                                    except Exception as fallback_error:
-                                        fallback_msg = str(fallback_error)
-                                        if "insufficient_quota" in fallback_msg.lower() or ("quota" in fallback_msg.lower() and "429" in fallback_msg) or "billing" in fallback_msg.lower():
-                                            raise Exception(f"OpenAI quota exceeded on fallback model. Please check your OpenAI billing and plan details.")
-                                        if "429" in fallback_msg or "rate limit" in fallback_msg.lower():
-                                            raise Exception(f"OpenAI rate limit exceeded on fallback model. Please wait and try again.")
-                                        raise Exception(f"Bedrock access denied and both OpenAI models failed: {fallback_msg}")
-                                else:
-                                    raise Exception(f"Bedrock access denied and OpenAI model not found: {error_msg}")
-                            else:
-                                raise Exception(f"Bedrock access denied and OpenAI error: {openai_error}")
-                    else:
-                        raise Exception(f"Bedrock access denied and OpenAI not available: {error_msg}")
-                else:
-                    # Re-raise other errors
-                    raise
-        
-        elif self.client:
-            # Use OpenAI (synchronous call, but we're in async context)
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ]
-            params = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": temperature,
-            }
-            if max_tokens:
-                params["max_tokens"] = max_tokens
-            if response_format:
-                params["response_format"] = response_format
-            
-            try:
-                response = self.client.chat.completions.create(**params)
-                return response.choices[0].message.content
-            except (RateLimitError, APIError) as e:
-                error_msg = str(e)
-                error_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
-                
-                # Check if it's a quota/billing error (429 with insufficient_quota)
-                if "insufficient_quota" in error_msg.lower() or "quota" in error_msg.lower() or "billing" in error_msg.lower():
-                    raise Exception(f"OpenAI quota exceeded. Please check your OpenAI billing and plan details. You may need to add credits or upgrade your plan. Error: {error_msg}")
-                
-                # Check if it's a rate limit error (429)
-                if isinstance(e, RateLimitError) or (error_code == 429) or "429" in error_msg or "rate limit" in error_msg.lower():
-                    raise Exception(f"OpenAI rate limit exceeded. Please wait a moment and try again. Error: {error_msg}")
-                
-                # Check if it's a model not found error (404)
-                if (error_code == 404) or "404" in error_msg or "model_not_found" in error_msg.lower() or "does not exist" in error_msg.lower():
-                    logger.warning(
-                        f"OpenAI model not found | Primary model: {self.model} | "
-                        f"Trying fallback: {self.fallback_model} | Error: {error_msg}"
-                    )
-                    # Try with fallback model
-                    if self.model != self.fallback_model:
-                        params["model"] = self.fallback_model
-                        try:
-                            response = self.client.chat.completions.create(**params)
-                            return response.choices[0].message.content
-                        except (RateLimitError, APIError) as fallback_error:
-                            fallback_code = getattr(fallback_error, 'status_code', None) or getattr(fallback_error, 'code', None)
-                            fallback_msg = str(fallback_error)
-                            if "insufficient_quota" in fallback_msg.lower() or "quota" in fallback_msg.lower() or "billing" in fallback_msg.lower():
-                                raise Exception(f"OpenAI quota exceeded on fallback model. Please check your OpenAI billing and plan details.")
-                            if isinstance(fallback_error, RateLimitError) or (fallback_code == 429):
-                                raise Exception(f"OpenAI rate limit exceeded on fallback model. Please wait and try again.")
-                            raise Exception(f"Both primary model '{self.model}' and fallback model '{self.fallback_model}' failed: {fallback_error}")
-                        except Exception as fallback_error:
-                            fallback_msg = str(fallback_error)
-                            if "insufficient_quota" in fallback_msg.lower() or ("quota" in fallback_msg.lower() and "429" in fallback_msg) or "billing" in fallback_msg.lower():
-                                raise Exception(f"OpenAI quota exceeded on fallback model. Please check your OpenAI billing and plan details.")
-                            if "429" in fallback_msg or "rate limit" in fallback_msg.lower():
-                                raise Exception(f"OpenAI rate limit exceeded on fallback model. Please wait and try again.")
-                            raise Exception(f"Both primary model '{self.model}' and fallback model '{self.fallback_model}' failed: {fallback_error}")
-                    else:
-                        raise Exception(f"Model '{self.model}' not found and no fallback available: {error_msg}")
-                else:
-                    # Re-raise other errors
-                    raise
-            except Exception as e:
-                error_msg = str(e)
-                # Check if it's a quota/billing error first
-                if "insufficient_quota" in error_msg.lower() or ("quota" in error_msg.lower() and "429" in error_msg) or "billing" in error_msg.lower():
-                    raise Exception(f"OpenAI quota exceeded. Please check your OpenAI billing and plan details. You may need to add credits or upgrade your plan. Error: {error_msg}")
-                # Check for rate limit in generic exception
-                if "429" in error_msg or "rate limit" in error_msg.lower() or "too many requests" in error_msg.lower():
-                    raise Exception(f"OpenAI rate limit exceeded. Please wait a moment and try again. Error: {error_msg}")
-                # Check if it's a model not found error (404)
-                if "404" in error_msg or "model_not_found" in error_msg.lower() or "does not exist" in error_msg.lower():
-                    logger.warning(
-                        f"OpenAI model not found | Primary model: {self.model} | "
-                        f"Trying fallback: {self.fallback_model} | Error: {error_msg}"
-                    )
-                    # Try with fallback model
-                    if self.model != self.fallback_model:
-                        params["model"] = self.fallback_model
-                        try:
-                            response = self.client.chat.completions.create(**params)
-                            return response.choices[0].message.content
-                        except Exception as fallback_error:
-                            fallback_msg = str(fallback_error)
-                            if "insufficient_quota" in fallback_msg.lower() or ("quota" in fallback_msg.lower() and "429" in fallback_msg) or "billing" in fallback_msg.lower():
-                                raise Exception(f"OpenAI quota exceeded on fallback model. Please check your OpenAI billing and plan details.")
-                            if "429" in fallback_msg or "rate limit" in fallback_msg.lower():
-                                raise Exception(f"OpenAI rate limit exceeded on fallback model. Please wait and try again.")
-                            raise Exception(f"Both primary model '{self.model}' and fallback model '{self.fallback_model}' failed: {fallback_error}")
-                    else:
-                        raise Exception(f"Model '{self.model}' not found and no fallback available: {error_msg}")
-                else:
-                    # Re-raise other errors
-                    raise
-        else:
-            raise Exception("No AI service available")
+        """Unified async method to call either OpenAI or Bedrock via provider manager"""
+        return await self.provider_manager.generate_text(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format
+        )
     
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
         """Safely parse JSON from AI response, handling markdown code blocks and control characters"""
@@ -551,7 +321,7 @@ class AIService:
         duration: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generate Minutes of Meeting from transcript"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             mom_data = self._generate_mom_fallback(transcript)
             mom_data["session_id"] = session_id
             mom_data["duration"] = duration
@@ -624,7 +394,7 @@ Format the response as JSON with the following structure:
         if len(transcript.strip()) < 50:
             return "Untitled Meeting"
         
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             # Fallback: extract first meaningful sentence or phrase
             sentences = transcript.split('.')
             if sentences:
@@ -695,7 +465,7 @@ Generate only the title, nothing else. Do not include quotes, prefixes, or expla
     
     async def generate_faqs(self, transcript: str, mom: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate FAQs from transcript and MOM"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return []
         
         prompt = f"""Based on the following meeting transcript and MOM, generate 3-5 frequently asked questions (FAQs) that might arise.
@@ -740,7 +510,7 @@ Generate FAQs in JSON format:
         recipients: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Generate follow-up email draft from MOM"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return self._generate_email_draft_fallback(mom)
         
         prompt = f"""Generate a professional follow-up email based on the following meeting minutes.
@@ -819,7 +589,7 @@ Best regards""",
         emails: Optional[List[Dict[str, Any]]] = None
     ) -> List[str]:
         """Detect potential risks and deadlines"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return []
         
         prompt = f"""Analyze the following information and identify potential risks, missed deadlines, or urgent items that need attention.
@@ -862,7 +632,7 @@ Return as JSON array of risk descriptions:
     
     async def summarize_email(self, email_content: str) -> str:
         """Summarize email content"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return email_content[:200] + "..."
         
         prompt = f"""Summarize the following email in 2-3 sentences, highlighting:
@@ -995,7 +765,7 @@ Urgent: {sum(1 for m in messages if m.get('is_urgent', False))}"""
     
     async def suggest_auto_reply(self, email_content: str, context: Optional[str] = None) -> Dict[str, Any]:
         """Suggest automatic reply for email"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {"suggested_reply": "Thank you for your email. I will review and respond shortly.", "confidence": 0.5}
         
         prompt = f"""Based on the following email, suggest an appropriate auto-reply if one is warranted.
@@ -1037,7 +807,7 @@ Determine if an auto-reply is appropriate and suggest one. Return JSON:
         mom: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Analyze meeting for sentiment, topics, and engagement insights"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "sentiment": "neutral",
                 "topics": [],
@@ -1095,7 +865,7 @@ Provide analysis in JSON format:
     
     async def categorize_email(self, email_content: str, subject: str, sender: str) -> Dict[str, Any]:
         """Categorize email by type, priority, and action required"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "category": "general",
                 "priority": "medium",
@@ -1150,7 +920,7 @@ Provide categorization in JSON format:
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """AI chat assistant for answering questions about meetings, emails, etc."""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "answer": "I'm sorry, AI services are not available at the moment.",
                 "confidence": 0.0,
@@ -1498,7 +1268,7 @@ Return JSON with ranked results:
         email_priority: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Generate actionable todos from email content using AI"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             # Fallback: return a single todo based on subject
             return [{
                 "title": email_subject[:100] if email_subject else "Email action required",
@@ -1599,7 +1369,7 @@ Return JSON format:
     
     async def analyze_email_sentiment(self, email_content: str, subject: str) -> Dict[str, Any]:
         """Analyze email sentiment (frustration, urgency, positive/negative)"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "sentiment": "neutral",
                 "sentiment_score": 0.5,
@@ -1657,7 +1427,7 @@ Provide analysis in JSON format:
         received_at: Optional[str] = None
     ) -> Dict[str, Any]:
         """Score email priority by importance (0-100)"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "priority_score": 50,
                 "priority_level": "medium",
@@ -1991,7 +1761,7 @@ Return JSON:
         meetings: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Generate daily digest combining emails + Teams activity"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "summary": "Daily digest unavailable",
                 "highlights": [],
@@ -2063,7 +1833,7 @@ Return JSON:
         meetings: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Predict deadline risks based on todos, emails, and meetings"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "at_risk": [],
                 "warnings": [],
@@ -2140,7 +1910,7 @@ Return JSON:
         tone: Optional[str] = None
     ) -> Dict[str, Any]:
         """Suggest polished Teams responses"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "suggested_response": "Thank you for your message.",
                 "tone": "professional",
@@ -2202,7 +1972,7 @@ Return JSON:
         issue_type: str = "Task"
     ) -> Dict[str, Any]:
         """Convert text into Jira issue format"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "title": text[:100],
                 "description": text,
@@ -2256,7 +2026,7 @@ Return JSON:
         page_type: str = "Documentation"
     ) -> Dict[str, Any]:
         """Convert text into Confluence page format"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "title": text[:100],
                 "content": text,
@@ -2312,7 +2082,7 @@ Return JSON:
         context: Optional[str] = None
     ) -> Dict[str, Any]:
         """Optimize communication tone for target audience"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             return {
                 "optimized_text": text,
                 "tone": desired_tone,
@@ -2370,7 +2140,7 @@ Return JSON:
         meetings: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Generate smart notifications - only alert on truly important items"""
-        if not self.client and not self.bedrock_service:
+        if not self.provider_manager.has_any_provider():
             # Fallback: simple filtering - ensure all required fields are present
             urgent_emails = [e for e in emails if e.get("is_urgent", False)][:5]
             urgent_teams = [m for m in teams_messages if m.get("is_urgent", False)][:5]
