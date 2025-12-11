@@ -278,3 +278,109 @@ class EmailIntegration:
             "mailbox_summary": mailbox_summary,
             "emails": emails
         }
+    
+    async def send_email(
+        self,
+        to: List[str],
+        subject: str,
+        body: str,
+        body_type: str = "text",  # "text" or "html"
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None,
+        importance: str = "normal"  # "low", "normal", "high"
+    ) -> Dict[str, Any]:
+        """Send an email via Microsoft Graph API
+        
+        Args:
+            to: List of recipient email addresses
+            subject: Email subject
+            body: Email body content
+            body_type: "text" or "html"
+            cc: Optional list of CC email addresses
+            bcc: Optional list of BCC email addresses
+            importance: "low", "normal", or "high"
+        
+        Returns:
+            Dict with message_id and status
+        """
+        # Get token from stored OAuth tokens
+        from app.api.auth import get_microsoft_token
+        self.microsoft_token = await get_microsoft_token()
+        
+        # Validate token
+        if not self.microsoft_token or not self.microsoft_token.strip():
+            logger.warning("[Email] No authentication token available for sending email")
+            raise ValueError("No authentication token available. Please authenticate with Microsoft first.")
+        
+        token_clean = self.microsoft_token.strip()
+        if len(token_clean) < 50:
+            logger.warning(f"[Email] Token appears to be invalid (too short: {len(token_clean)} chars)")
+            raise ValueError("Authentication token is invalid. Please re-authenticate.")
+        
+        auth_header = f"Bearer {token_clean}"
+        
+        # Build message payload
+        message_payload = {
+            "message": {
+                "subject": subject,
+                "body": {
+                    "contentType": body_type,
+                    "content": body
+                },
+                "toRecipients": [{"emailAddress": {"address": addr}} for addr in to],
+                "importance": importance
+            }
+        }
+        
+        # Add CC if provided
+        if cc:
+            message_payload["message"]["ccRecipients"] = [{"emailAddress": {"address": addr}} for addr in cc]
+        
+        # Add BCC if provided
+        if bcc:
+            message_payload["message"]["bccRecipients"] = [{"emailAddress": {"address": addr}} for addr in bcc]
+        
+        try:
+            url = "https://graph.microsoft.com/v1.0/me/sendMail"
+            timeout = httpx.Timeout(30.0, connect=15.0)
+            
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Authorization": auth_header,
+                        "Content-Type": "application/json"
+                    },
+                    json=message_payload
+                )
+                
+                if response.status_code in [401, 403]:
+                    error_body = response.text
+                    try:
+                        error_json = response.json()
+                        error_code = error_json.get("error", {}).get("code", "")
+                        error_message = error_json.get("error", {}).get("message", "")
+                        logger.warning(
+                            f"[Email] Authentication error sending email ({response.status_code}): {error_code} - {error_message}"
+                        )
+                        raise ValueError(f"Authentication error: {error_message}. Please ensure you have Mail.Send permissions.")
+                    except:
+                        raise ValueError(f"Authentication error (status {response.status_code}): {error_body}")
+                
+                if response.status_code not in [200, 202]:
+                    error_body = response.text
+                    logger.error(f"[Email] Error sending email (status {response.status_code}): {error_body}")
+                    response.raise_for_status()
+                
+                logger.info(f"[Email] Successfully sent email to {', '.join(to)}")
+                return {
+                    "status": "sent",
+                    "message": "Email sent successfully",
+                    "recipients": to
+                }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[Email] HTTP error sending email: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[Email] Error sending email: {e}")
+            raise

@@ -386,6 +386,43 @@ class SmartNotifications(BaseModel):
     summary: str = "No notifications"
 
 
+class SendEmailRequest(BaseModel):
+    """Send email request"""
+    to: List[str]
+    subject: str
+    body: str
+    body_type: str = "text"  # "text" or "html"
+    cc: Optional[List[str]] = None
+    bcc: Optional[List[str]] = None
+    importance: str = "normal"  # "low", "normal", "high"
+
+
+class SendEmailResponse(BaseModel):
+    """Send email response"""
+    status: str
+    message: str
+    recipients: List[str]
+
+
+class SendTeamsMessageRequest(BaseModel):
+    """Send Teams message request"""
+    chat_id: Optional[str] = None  # For chat messages
+    team_id: Optional[str] = None  # For channel messages
+    channel_id: Optional[str] = None  # For channel messages
+    content: str
+    content_type: str = "text"  # "text" or "html"
+
+
+class SendTeamsMessageResponse(BaseModel):
+    """Send Teams message response"""
+    status: str
+    message: str
+    message_id: Optional[str] = None
+    chat_id: Optional[str] = None
+    team_id: Optional[str] = None
+    channel_id: Optional[str] = None
+
+
 
 
 

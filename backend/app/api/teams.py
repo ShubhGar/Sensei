@@ -6,7 +6,7 @@ from typing import Optional
 import logging
 import time
 
-from app.models.schemas import TeamsSummary
+from app.models.schemas import TeamsSummary, SendTeamsMessageRequest, SendTeamsMessageResponse
 from app.integrations.teams_integration import TeamsIntegration
 from app.services.ai_service import AIService
 
@@ -27,23 +27,33 @@ async def get_messages(
     team_id: Optional[str] = Query(None),
     channel_id: Optional[str] = Query(None),
     analyze_mentions: bool = Query(False, description="Analyze @mentions"),
-    analyze_activity: bool = Query(False, description="Analyze channel activity")
+    analyze_activity: bool = Query(False, description="Analyze channel activity"),
+    force_refresh: bool = Query(False, description="Force refresh and reset permission cache")
 ):
     """Get Teams messages with AI analysis"""
     try:
-        # Check cache first (only for basic requests without analysis)
+        # If force_refresh is True, reset permission cache and bypass cache
+        if force_refresh:
+            logger.info("[Teams] Force refresh requested - resetting permission cache and bypassing cache")
+            teams_integration.reset_permission_cache()
+            # Clear cache for this request
+            cache_key = f"teams_{chat_type}_{max_results}_{team_id}_{channel_id}_{analyze_mentions}_{analyze_activity}"
+            if cache_key in _teams_cache:
+                del _teams_cache[cache_key]
+        
+        # Check cache first (only for basic requests without analysis and not force_refresh)
         cache_key = f"teams_{chat_type}_{max_results}_{team_id}_{channel_id}_{analyze_mentions}_{analyze_activity}"
-        if not analyze_mentions and not analyze_activity:
+        if not force_refresh and not analyze_mentions and not analyze_activity:
             cached = _teams_cache.get(cache_key)
             if cached and (time.time() - cached["timestamp"]) < _cache_ttl:
                 logger.info(f"[Teams] Returning cached messages data (age: {time.time() - cached['timestamp']:.1f}s)")
                 return TeamsSummary(**cached["data"])
         
-        logger.info(f"[Teams] Getting messages - chat_type: {chat_type}, max_results: {max_results}, team_id: {team_id}, channel_id: {channel_id}")
+        logger.info(f"[Teams] Getting messages - chat_type: {chat_type}, max_results: {max_results}, team_id: {team_id}, channel_id: {channel_id}, force_refresh: {force_refresh}")
         
         result = None
         if chat_type == "chats":
-            result = await teams_integration.get_chats(max_results)
+            result = await teams_integration.get_chats(max_results, force_refresh=force_refresh)
         elif chat_type == "channels":
             if not team_id or not channel_id:
                 logger.warning(f"[Teams] Missing team_id/channel_id for channels - team_id: {team_id}, channel_id: {channel_id}")
@@ -215,5 +225,46 @@ async def authenticate_teams(auth_code: Optional[str] = None):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
+
+
+@router.post("/send-message", response_model=SendTeamsMessageResponse)
+async def send_teams_message(request: SendTeamsMessageRequest):
+    """Send a Teams message (chat or channel) based on AI-generated response"""
+    try:
+        # Validate request - must have either chat_id OR (team_id and channel_id)
+        if not request.chat_id and not (request.team_id and request.channel_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Either 'chat_id' (for chat messages) or both 'team_id' and 'channel_id' (for channel messages) must be provided"
+            )
+        
+        if request.chat_id:
+            # Send to chat
+            logger.info(f"[Teams] Sending message to chat {request.chat_id}")
+            result = await teams_integration.send_chat_message(
+                chat_id=request.chat_id,
+                content=request.content,
+                content_type=request.content_type
+            )
+        else:
+            # Send to channel
+            logger.info(f"[Teams] Sending message to channel {request.channel_id} in team {request.team_id}")
+            result = await teams_integration.send_channel_message(
+                team_id=request.team_id,
+                channel_id=request.channel_id,
+                content=request.content,
+                content_type=request.content_type
+            )
+        
+        logger.info(f"[Teams] Successfully sent message")
+        return SendTeamsMessageResponse(**result)
+    except ValueError as e:
+        logger.error(f"[Teams] Validation error sending message: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Teams] Error sending message: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error sending message: {str(e)}")
 
 

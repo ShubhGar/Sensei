@@ -55,6 +55,11 @@ async def summarize_transcript(
                     await db.commit()
                     await db.refresh(session)
                     logger.info(f"[AI Processing] Created session {request.session_id} in database before generating insights")
+                    
+                    # Remove from memory now that it's in the database
+                    if request.session_id in active_sessions:
+                        del active_sessions[request.session_id]
+                        logger.info(f"[AI Processing] Removed session {request.session_id} from memory (now in database)")
                 else:
                     logger.warning(f"[AI Processing] ERROR: Session {request.session_id} not found in DB or memory")
                     raise HTTPException(status_code=404, detail="Meeting session not found")

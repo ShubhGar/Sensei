@@ -42,6 +42,7 @@ import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead'
 import MarkEmailUnreadIcon from '@mui/icons-material/MarkEmailUnread'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import { emailAPI, authAPI } from '../services/api'
+import SendIcon from '@mui/icons-material/Send'
 import { useTheme } from '../ThemeContext'
 import ContextMenu from './ContextMenu'
 
@@ -66,6 +67,9 @@ const EmailView = () => {
   const [expandedEmails, setExpandedEmails] = useState(new Set())
   const [includeSentiment, setIncludeSentiment] = useState(false)
   const [includePriorityScore, setIncludePriorityScore] = useState(false)
+  const [sendEmailDialog, setSendEmailDialog] = useState({ open: false, emailData: null })
+  const [sendingEmail, setSendingEmail] = useState(false)
+  const [sendEmailError, setSendEmailError] = useState(null)
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -300,6 +304,48 @@ const EmailView = () => {
     }
   }
 
+  const handleSendEmail = async (emailData) => {
+    setSendingEmail(true)
+    setSendEmailError(null)
+    try {
+      await emailAPI.sendEmail(
+        emailData.to,
+        emailData.subject,
+        emailData.body,
+        'text',
+        emailData.cc,
+        emailData.bcc,
+        emailData.importance || 'normal'
+      )
+      setSendEmailDialog({ open: false, emailData: null })
+      setSuggestedReply(null)
+      setSelectedEmail(null)
+      // Show success
+      setError(null)
+      alert('Email sent successfully!')
+    } catch (error) {
+      setSendEmailError(error.response?.data?.detail || error.message || 'Failed to send email')
+    } finally {
+      setSendingEmail(false)
+    }
+  }
+
+  const handleOpenSendEmailDialog = () => {
+    if (!suggestedReply) return
+    const email = emails.find(e => e.id === selectedEmail)
+    setSendEmailDialog({
+      open: true,
+      emailData: {
+        to: email?.sender_email ? [email.sender_email] : [],
+        subject: email?.subject ? `Re: ${email.subject}` : 'Re: ',
+        body: suggestedReply.suggested_reply,
+        cc: [],
+        bcc: [],
+        importance: 'normal'
+      }
+    })
+  }
+
   return (
     <Box>
       <Box sx={{ mb: 3 }}>
@@ -451,6 +497,13 @@ const EmailView = () => {
                 disabled={loading}
               >
                 Refresh
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={<SendIcon />}
+                onClick={() => setSendEmailDialog({ open: true, emailData: { to: [], subject: '', body: '', cc: [], bcc: [], importance: 'normal' } })}
+              >
+                Compose Email
               </Button>
             </Box>
           </Box>
@@ -787,7 +840,7 @@ const EmailView = () => {
 
                             {/* Summary (if available) */}
                             {email.summary && (
-                              <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'background.default', borderRadius: 1 }}>
+                              <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'background.default', borderRadius: 2 }}>
                                 <Typography 
                                   variant="caption" 
                                   sx={{ 
@@ -855,7 +908,7 @@ const EmailView = () => {
                                   gap: 1,
                                   p: 1.5,
                                   bgcolor: 'background.default',
-                                  borderRadius: 1,
+                                  borderRadius: 2,
                                 }}>
                                   <Box sx={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
                                     <Typography variant="caption" color="text.secondary">
@@ -876,7 +929,7 @@ const EmailView = () => {
                                   
                                   {/* Sentiment Analysis */}
                                   {email.sentiment && (
-                                    <Box sx={{ mt: 1, p: 1.5, bgcolor: 'background.paper', borderRadius: 1, borderLeft: '3px solid', borderLeftColor: 'primary.main' }}>
+                                    <Box sx={{ mt: 1, p: 1.5, bgcolor: 'background.paper', borderRadius: 2, borderLeft: '3px solid', borderLeftColor: 'primary.main' }}>
                                       <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, mb: 1, display: 'block' }}>
                                         Sentiment Analysis
                                       </Typography>
@@ -915,7 +968,7 @@ const EmailView = () => {
 
                                   {/* Priority Score */}
                                   {email.priority_score && (
-                                    <Box sx={{ mt: 1, p: 1.5, bgcolor: 'background.paper', borderRadius: 1, borderLeft: '3px solid', borderLeftColor: 'warning.main' }}>
+                                    <Box sx={{ mt: 1, p: 1.5, bgcolor: 'background.paper', borderRadius: 2, borderLeft: '3px solid', borderLeftColor: 'warning.main' }}>
                                       <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, mb: 1, display: 'block' }}>
                                         Priority Score
                                       </Typography>
@@ -1055,7 +1108,7 @@ const EmailView = () => {
         <DialogContent sx={{ mt: 2 }}>
           {suggestedReply && (
             <Box>
-              <Box sx={{ mb: 2, p: 1.5, bgcolor: 'background.default', borderRadius: 1 }}>
+              <Box sx={{ mb: 2, p: 1.5, bgcolor: 'background.default', borderRadius: 2 }}>
                 <Typography 
                   variant="body2" 
                   sx={{ 
@@ -1072,7 +1125,7 @@ const EmailView = () => {
                   sx={{ 
                     mb: 2,
                     borderRadius: 2,
-                    bgcolor: mode === 'dark' ? '#1E2A3A' : '#E3F2FD',
+                    bgcolor: mode === 'dark' ? 'rgba(33, 150, 243, 0.15)' : 'rgba(33, 150, 243, 0.1)',
                   }}
                 >
                   {suggestedReply.reasoning}
@@ -1083,10 +1136,14 @@ const EmailView = () => {
                 multiline
                 rows={10}
                 value={suggestedReply.suggested_reply}
-                variant="outlined"
-                InputProps={{
-                  readOnly: true
+                onChange={(e) => {
+                  setSuggestedReply({
+                    ...suggestedReply,
+                    suggested_reply: e.target.value
+                  })
                 }}
+                variant="outlined"
+                label="Reply Content (Editable)"
                 sx={{
                   '& .MuiOutlinedInput-root': {
                     bgcolor: 'background.default',
@@ -1102,12 +1159,32 @@ const EmailView = () => {
               setSuggestedReply(null)
               setSelectedEmail(null)
             }}
-            variant="contained"
+            variant="outlined"
           >
             Close
           </Button>
+          <Button
+            onClick={handleOpenSendEmailDialog}
+            variant="contained"
+            startIcon={<SendIcon />}
+          >
+            Send Email
+          </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Send Email Dialog */}
+      <SendEmailDialog
+        open={sendEmailDialog.open}
+        onClose={() => {
+          setSendEmailDialog({ open: false, emailData: null })
+          setSendEmailError(null)
+        }}
+        emailData={sendEmailDialog.emailData}
+        onSend={handleSendEmail}
+        sending={sendingEmail}
+        error={sendEmailError}
+      />
 
       {/* Token Input Dialog */}
       <Dialog
@@ -1202,6 +1279,114 @@ const EmailView = () => {
         sourceType="email"
       />
     </Box>
+  )
+}
+
+// Send Email Dialog Component
+const SendEmailDialog = ({ open, onClose, emailData, onSend, sending, error }) => {
+  const [to, setTo] = useState('')
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [cc, setCc] = useState('')
+  const [bcc, setBcc] = useState('')
+  const [importance, setImportance] = useState('normal')
+
+  useEffect(() => {
+    if (open && emailData) {
+      setTo(emailData.to ? emailData.to.join(', ') : '')
+      setSubject(emailData.subject || '')
+      setBody(emailData.body || '')
+      setCc(emailData.cc ? emailData.cc.join(', ') : '')
+      setBcc(emailData.bcc ? emailData.bcc.join(', ') : '')
+      setImportance(emailData.importance || 'normal')
+    }
+  }, [open, emailData])
+
+  const handleSubmit = () => {
+    const toList = to.split(',').map(email => email.trim()).filter(email => email)
+    if (toList.length === 0) {
+      return
+    }
+    onSend({
+      to: toList,
+      subject: subject || 'No Subject',
+      body: body,
+      cc: cc ? cc.split(',').map(email => email.trim()).filter(email => email) : null,
+      bcc: bcc ? bcc.split(',').map(email => email.trim()).filter(email => email) : null,
+      importance
+    })
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Send Email</DialogTitle>
+      <DialogContent>
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+        <TextField
+          fullWidth
+          label="To"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="email@example.com"
+          required
+          sx={{ mb: 2 }}
+        />
+        <TextField
+          fullWidth
+          label="Subject"
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          sx={{ mb: 2 }}
+        />
+        <TextField
+          fullWidth
+          multiline
+          rows={6}
+          label="Body"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          sx={{ mb: 2 }}
+        />
+        <TextField
+          fullWidth
+          label="CC (optional)"
+          value={cc}
+          onChange={(e) => setCc(e.target.value)}
+          placeholder="email@example.com"
+          sx={{ mb: 2 }}
+        />
+        <TextField
+          fullWidth
+          label="BCC (optional)"
+          value={bcc}
+          onChange={(e) => setBcc(e.target.value)}
+          placeholder="email@example.com"
+          sx={{ mb: 2 }}
+        />
+        <TextField
+          fullWidth
+          select
+          label="Importance"
+          value={importance}
+          onChange={(e) => setImportance(e.target.value)}
+          SelectProps={{ native: true }}
+        >
+          <option value="low">Low</option>
+          <option value="normal">Normal</option>
+          <option value="high">High</option>
+        </TextField>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={sending}>Cancel</Button>
+        <Button onClick={handleSubmit} variant="contained" disabled={sending || !to.trim()}>
+          {sending ? 'Sending...' : 'Send Email'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   )
 }
 

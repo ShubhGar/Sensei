@@ -268,7 +268,7 @@ const Home = () => {
         <Alert 
           severity="error" 
           sx={{ 
-            mb: 2.875,
+            mb: 3,
             borderRadius: 2,
           }} 
           onClose={() => setError(null)}
@@ -311,20 +311,20 @@ const Home = () => {
           >
             <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 }, display: 'flex', flexDirection: 'column', height: '100%', flexGrow: 1 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <Box
-                  sx={{
-                    p: 0.875,
-                    borderRadius: 1.5,
-                    bgcolor: 'primary.main',
-                    color: 'white',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    boxShadow: '0 2px 8px rgba(0, 150, 136, 0.2)',
-                  }}
-                >
-                  <MicIcon sx={{ fontSize: '1.2rem' }} />
-                </Box>
+                  <Box
+                    sx={{
+                      p: 1,
+                      borderRadius: 2,
+                      bgcolor: 'primary.main',
+                      color: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 2px 8px rgba(0, 150, 136, 0.2)',
+                    }}
+                  >
+                    <MicIcon sx={{ fontSize: '1.2rem' }} />
+                  </Box>
                 <Typography 
                   variant="h6" 
                   sx={{ 
@@ -479,8 +479,8 @@ const Home = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.625, mt: 0.125 }}>
                 <Box
                   sx={{
-                    p: 0.875,
-                    borderRadius: 1.5,
+                    p: 1,
+                    borderRadius: 2,
                     bgcolor: 'secondary.main',
                     color: 'white',
                     display: 'flex',
@@ -534,7 +534,7 @@ const Home = () => {
                         mb: 2,
                         p: 1.5,
                         bgcolor: mode === 'dark' ? 'rgba(38, 166, 154, 0.1)' : 'rgba(0, 150, 136, 0.08)',
-                        borderRadius: 1.5,
+                        borderRadius: 2,
                         borderLeft: '3px solid',
                         borderLeftColor: 'primary.main',
                       }}
@@ -559,7 +559,7 @@ const Home = () => {
                         mt: 2,
                         mb: 2,
                         borderRadius: 2,
-                        bgcolor: mode === 'dark' ? '#3A2A1E' : '#FFF8E1',
+                        bgcolor: mode === 'dark' ? 'rgba(255, 152, 0, 0.15)' : 'rgba(255, 152, 0, 0.1)',
                       }}
                     >
                       {emailSummary.pending_approvals} pending approvals
@@ -651,8 +651,8 @@ const Home = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.625, mt: 0.125 }}>
                 <Box
                   sx={{
-                    p: 0.875,
-                    borderRadius: 1.5,
+                    p: 1,
+                    borderRadius: 2,
                     bgcolor: 'secondary.main',
                     color: 'white',
                     display: 'flex',
@@ -710,7 +710,7 @@ const Home = () => {
                         mb: 2,
                         p: 1.5,
                         bgcolor: mode === 'dark' ? 'rgba(38, 166, 154, 0.1)' : 'rgba(0, 150, 136, 0.08)',
-                        borderRadius: 1.5,
+                        borderRadius: 2,
                         borderLeft: '3px solid',
                         borderLeftColor: 'primary.main',
                       }}
@@ -856,7 +856,7 @@ const Home = () => {
                           p: 1.5,
                           mb: 1,
                           bgcolor: 'background.default',
-                          borderRadius: 1,
+                          borderRadius: 2,
                           borderLeft: '3px solid',
                           borderLeftColor: 'primary.main',
                         }
@@ -986,7 +986,7 @@ const Home = () => {
                         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
                           Summary
                         </Typography>
-                        <Paper sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
+                        <Paper sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 2 }}>
                           <Typography variant="body2" sx={{ lineHeight: 1.7 }}>
                             {selectedMeeting.mom.summary || 'No summary available'}
                           </Typography>
@@ -999,7 +999,7 @@ const Home = () => {
                             Decisions
                           </Typography>
                           {selectedMeeting.mom.decisions.map((decision, idx) => (
-                            <Paper key={idx} sx={{ p: 1.5, mb: 1, bgcolor: 'background.paper', borderRadius: 1, borderLeft: '3px solid', borderLeftColor: 'primary.light' }}>
+                            <Paper key={idx} sx={{ p: 1.5, mb: 1, bgcolor: 'background.paper', borderRadius: 2, borderLeft: '3px solid', borderLeftColor: 'primary.main' }}>
                               <Typography variant="body2" sx={{ fontWeight: 500 }}>
                                 {decision.decision || 'No decision text'}
                               </Typography>
@@ -1026,7 +1026,7 @@ const Home = () => {
                                 p: 1.5, 
                                 mb: 1, 
                                 bgcolor: 'background.paper', 
-                                borderRadius: 1, 
+                                borderRadius: 2, 
                                 borderLeft: '3px solid', 
                                 borderLeftColor: 'primary.main',
                                 cursor: 'context-menu',
@@ -1059,7 +1059,7 @@ const Home = () => {
                     </AccordionSummary>
                     <AccordionDetails>
                       {selectedMeeting.faqs.map((faq, idx) => (
-                        <Paper key={idx} sx={{ p: 2, mb: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
+                        <Paper key={idx} sx={{ p: 2, mb: 2, bgcolor: 'background.paper', borderRadius: 2 }}>
                           <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'primary.dark', mb: 1 }}>
                             Q: {faq.question || 'No question'}
                           </Typography>
@@ -1089,7 +1089,7 @@ const Home = () => {
                       </Box>
                     </AccordionSummary>
                     <AccordionDetails>
-                      <Paper sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
+                      <Paper sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 2 }}>
                         <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', lineHeight: 1.7 }}>
                           To: {selectedMeeting.email_draft.to && selectedMeeting.email_draft.to.length > 0 ? selectedMeeting.email_draft.to.join(', ') : 'N/A'}
                           {selectedMeeting.email_draft.cc && selectedMeeting.email_draft.cc.length > 0 && (
@@ -1114,7 +1114,7 @@ const Home = () => {
                       </Typography>
                     </AccordionSummary>
                     <AccordionDetails>
-                      <Paper sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 1, maxHeight: 400, overflow: 'auto' }}>
+                      <Paper sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 2, maxHeight: 400, overflow: 'auto' }}>
                         <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', lineHeight: 1.7 }}>
                           {selectedMeeting.full_transcript || selectedMeeting.transcript || 'No transcript available'}
                         </Typography>

@@ -7,7 +7,7 @@ import logging
 import time
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import EmailSummary, AutoReplySuggestion, TodoItemCreate, TodoItemResponse
+from app.models.schemas import EmailSummary, AutoReplySuggestion, TodoItemCreate, TodoItemResponse, SendEmailRequest, SendEmailResponse
 from app.integrations.email_integration import EmailIntegration
 from app.services.ai_service import AIService
 from app.database import get_db
@@ -220,5 +220,33 @@ async def generate_todos_from_email(
     except Exception as e:
         logger.error(f"[Email] Error generating todos from email: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating todos: {str(e)}")
+
+
+@router.post("/send", response_model=SendEmailResponse)
+async def send_email(request: SendEmailRequest):
+    """Send an email based on AI-generated response"""
+    try:
+        logger.info(f"[Email] Sending email to {', '.join(request.to)}")
+        
+        result = await email_integration.send_email(
+            to=request.to,
+            subject=request.subject,
+            body=request.body,
+            body_type=request.body_type,
+            cc=request.cc,
+            bcc=request.bcc,
+            importance=request.importance
+        )
+        
+        logger.info(f"[Email] Successfully sent email")
+        return SendEmailResponse(**result)
+    except ValueError as e:
+        logger.error(f"[Email] Validation error sending email: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Email] Error sending email: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error sending email: {str(e)}")
 
 
