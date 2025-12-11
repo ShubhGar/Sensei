@@ -189,7 +189,10 @@ ffmpeg-*.log
 *.onnx
 *.h5
 *.pb
+# ML model directories (but not Python source code models/)
 models/
+!backend/app/models/
+!**/app/models/
 checkpoints/
 
 # Backup files
