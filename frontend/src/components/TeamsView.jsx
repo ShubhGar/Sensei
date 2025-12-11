@@ -35,6 +35,7 @@ import GroupsIcon from '@mui/icons-material/Groups'
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline'
 import EmailIcon from '@mui/icons-material/Email'
 import { teamsAPI, authAPI, aiAPI } from '../services/api'
+import SendIcon from '@mui/icons-material/Send'
 import { useTheme } from '../ThemeContext'
 import ContextMenu from './ContextMenu'
 
@@ -59,6 +60,9 @@ const TeamsView = () => {
   const [suggestedResponse, setSuggestedResponse] = useState(null)
   const [responseDialogOpen, setResponseDialogOpen] = useState(false)
   const [summaryDialogOpen, setSummaryDialogOpen] = useState(false)
+  const [sendMessageDialog, setSendMessageDialog] = useState({ open: false, messageData: null })
+  const [sendingMessage, setSendingMessage] = useState(false)
+  const [sendMessageError, setSendMessageError] = useState(null)
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -91,11 +95,11 @@ const TeamsView = () => {
     }
   }, [])
 
-  const loadMessages = useCallback(async () => {
+  const loadMessages = useCallback(async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
     try {
-      const response = await teamsAPI.getMessages(50, chatType, null, null, analyzeMentions, analyzeActivity)
+      const response = await teamsAPI.getMessages(50, chatType, null, null, analyzeMentions, analyzeActivity, forceRefresh)
       console.log('[TeamsView] API Response:', response.data)
       setSummary(response.data)
       const messagesList = response.data.messages || []
@@ -150,7 +154,7 @@ const TeamsView = () => {
       setTokenDialogOpen(false)
       setTokenInput('')
       await checkAuthStatus()
-      await loadMessages()
+      await loadMessages(true) // Force refresh after setting token
     } catch (err) {
       setError('Failed to set token: ' + (err.response?.data?.detail || err.message))
     } finally {
@@ -209,6 +213,42 @@ const TeamsView = () => {
     } else if (newValue === 'communications') {
       navigate('/communications')
     }
+  }
+
+  const handleSendTeamsMessage = async (messageData) => {
+    setSendingMessage(true)
+    setSendMessageError(null)
+    try {
+      await teamsAPI.sendMessage(
+        messageData.chatId,
+        messageData.teamId,
+        messageData.channelId,
+        messageData.content,
+        'text'
+      )
+      setSendMessageDialog({ open: false, messageData: null })
+      setSuggestedResponse(null)
+      // Show success
+      setError(null)
+      alert('Teams message sent successfully!')
+    } catch (error) {
+      setSendMessageError(error.response?.data?.detail || error.message || 'Failed to send message')
+    } finally {
+      setSendingMessage(false)
+    }
+  }
+
+  const handleOpenSendMessageDialog = () => {
+    if (!suggestedResponse) return
+    setSendMessageDialog({
+      open: true,
+      messageData: {
+        chatId: null,
+        teamId: null,
+        channelId: null,
+        content: suggestedResponse.suggested_response
+      }
+    })
   }
 
   return (
@@ -384,10 +424,17 @@ const TeamsView = () => {
               )}
               <Button 
                 variant="outlined" 
-                onClick={loadMessages} 
+                onClick={() => loadMessages(true)} 
                 disabled={loading}
               >
                 Refresh
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={<SendIcon />}
+                onClick={() => setSendMessageDialog({ open: true, messageData: { chatId: null, teamId: null, channelId: null, content: '' } })}
+              >
+                Send Message
               </Button>
             </Box>
           </Box>
@@ -431,7 +478,7 @@ const TeamsView = () => {
                   <AccordionDetails>
                     <List>
                       {summary.mention_analysis.unanswered_mentions.map((mention, idx) => (
-                        <ListItem key={idx} sx={{ borderLeft: '3px solid', borderLeftColor: 'warning.main', mb: 1, bgcolor: 'background.default', borderRadius: 1 }}>
+                        <ListItem key={idx} sx={{ borderLeft: '3px solid', borderLeftColor: 'warning.main', mb: 1, bgcolor: 'background.default', borderRadius: 2 }}>
                           <ListItemText
                             primary={`From ${mention.sender}`}
                             secondary={
@@ -467,7 +514,7 @@ const TeamsView = () => {
                         <Typography variant="subtitle2" fontWeight={600} mb={1}>Blockers:</Typography>
                         <List>
                           {summary.channel_activity.blockers.map((blocker, idx) => (
-                            <ListItem key={idx} sx={{ borderLeft: '3px solid', borderLeftColor: 'error.main', mb: 1, bgcolor: 'background.default', borderRadius: 1 }}>
+                            <ListItem key={idx} sx={{ borderLeft: '3px solid', borderLeftColor: 'error.main', mb: 1, bgcolor: 'background.default', borderRadius: 2 }}>
                               <ListItemText
                                 primary={blocker.issue}
                                 secondary={
@@ -584,7 +631,7 @@ const TeamsView = () => {
                 )}
                 <Button
                   variant="outlined"
-                  onClick={loadMessages}
+                  onClick={() => loadMessages(true)}
                   startIcon={<GroupsIcon />}
                 >
                   Refresh Messages
@@ -853,7 +900,7 @@ const TeamsView = () => {
                   <Typography variant="subtitle2" fontWeight={600} mb={1}>Action Items:</Typography>
                   <List>
                     {conversationSummary.action_items.map((item, idx) => (
-                      <ListItem key={idx} sx={{ borderLeft: '3px solid', borderLeftColor: 'primary.main', mb: 1, bgcolor: 'background.default', borderRadius: 1 }}>
+                      <ListItem key={idx} sx={{ borderLeft: '3px solid', borderLeftColor: 'primary.main', mb: 1, bgcolor: 'background.default', borderRadius: 2 }}>
                         <ListItemText
                           primary={item.task}
                           secondary={`Owner: ${item.owner || 'Unassigned'}${item.deadline ? ` | Deadline: ${item.deadline}` : ''}`}
@@ -914,7 +961,7 @@ const TeamsView = () => {
         <DialogContent sx={{ mt: 2 }}>
           {suggestedResponse && (
             <Box>
-              <Box sx={{ mb: 2, p: 1.5, bgcolor: 'background.default', borderRadius: 1 }}>
+              <Box sx={{ mb: 2, p: 1.5, bgcolor: 'background.default', borderRadius: 2 }}>
                 <Typography variant="body2" color="text.secondary">
                   Confidence: <strong style={{ color: '#009688' }}>{(suggestedResponse.confidence * 100).toFixed(1)}%</strong>
                 </Typography>
@@ -927,10 +974,14 @@ const TeamsView = () => {
                 multiline
                 rows={8}
                 value={suggestedResponse.suggested_response}
-                variant="outlined"
-                InputProps={{
-                  readOnly: true
+                onChange={(e) => {
+                  setSuggestedResponse({
+                    ...suggestedResponse,
+                    suggested_response: e.target.value
+                  })
                 }}
+                variant="outlined"
+                label="Response Content (Editable)"
                 sx={{
                   '& .MuiOutlinedInput-root': {
                     bgcolor: 'background.default',
@@ -942,7 +993,7 @@ const TeamsView = () => {
                   <Typography variant="subtitle2" fontWeight={600} mb={1}>Alternative Responses:</Typography>
                   <List>
                     {suggestedResponse.alternatives.map((alt, idx) => (
-                      <ListItem key={idx} sx={{ bgcolor: 'background.default', mb: 1, borderRadius: 1 }}>
+                      <ListItem key={idx} sx={{ bgcolor: 'background.default', mb: 1, borderRadius: 2 }}>
                         <ListItemText primary={alt} />
                       </ListItem>
                     ))}
@@ -953,11 +1004,31 @@ const TeamsView = () => {
           )}
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
-          <Button onClick={() => setResponseDialogOpen(false)} variant="contained">
+          <Button onClick={() => setResponseDialogOpen(false)} variant="outlined">
             Close
+          </Button>
+          <Button
+            onClick={handleOpenSendMessageDialog}
+            variant="contained"
+            startIcon={<SendIcon />}
+          >
+            Send Message
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Send Teams Message Dialog */}
+      <SendMessageDialog
+        open={sendMessageDialog.open}
+        onClose={() => {
+          setSendMessageDialog({ open: false, messageData: null })
+          setSendMessageError(null)
+        }}
+        messageData={sendMessageDialog.messageData}
+        onSend={handleSendTeamsMessage}
+        sending={sendingMessage}
+        error={sendMessageError}
+      />
 
       {/* Context Menu */}
       <ContextMenu
@@ -968,6 +1039,125 @@ const TeamsView = () => {
         sourceType="teams"
       />
     </Box>
+  )
+}
+
+// Send Teams Message Dialog Component
+const SendMessageDialog = ({ open, onClose, messageData, onSend, sending, error }) => {
+  const [messageType, setMessageType] = useState('chat') // 'chat' or 'channel'
+  const [chatId, setChatId] = useState('')
+  const [teamId, setTeamId] = useState('')
+  const [channelId, setChannelId] = useState('')
+  const [body, setBody] = useState('')
+
+  useEffect(() => {
+    if (open && messageData) {
+      setBody(messageData.content || '')
+      if (messageData.chatId) {
+        setMessageType('chat')
+        setChatId(messageData.chatId)
+      } else if (messageData.teamId && messageData.channelId) {
+        setMessageType('channel')
+        setTeamId(messageData.teamId)
+        setChannelId(messageData.channelId)
+      }
+    }
+  }, [open, messageData])
+
+  const handleSubmit = () => {
+    if (messageType === 'chat') {
+      if (!chatId.trim()) return
+      onSend({
+        chatId: chatId.trim(),
+        teamId: null,
+        channelId: null,
+        content: body
+      })
+    } else {
+      if (!teamId.trim() || !channelId.trim()) return
+      onSend({
+        chatId: null,
+        teamId: teamId.trim(),
+        channelId: channelId.trim(),
+        content: body
+      })
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Send Teams Message</DialogTitle>
+      <DialogContent>
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+        <TextField
+          fullWidth
+          select
+          label="Message Type"
+          value={messageType}
+          onChange={(e) => setMessageType(e.target.value)}
+          SelectProps={{ native: true }}
+          sx={{ mb: 2 }}
+        >
+          <option value="chat">Chat Message</option>
+          <option value="channel">Channel Message</option>
+        </TextField>
+        {messageType === 'chat' ? (
+          <TextField
+            fullWidth
+            label="Chat ID"
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+            placeholder="Enter Teams chat ID"
+            required
+            sx={{ mb: 2 }}
+            helperText="You can find the chat ID from the Teams API or URL"
+          />
+        ) : (
+          <>
+            <TextField
+              fullWidth
+              label="Team ID"
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
+              placeholder="Enter Teams team ID"
+              required
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              label="Channel ID"
+              value={channelId}
+              onChange={(e) => setChannelId(e.target.value)}
+              placeholder="Enter Teams channel ID"
+              required
+              sx={{ mb: 2 }}
+            />
+          </>
+        )}
+        <TextField
+          fullWidth
+          multiline
+          rows={6}
+          label="Message"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={sending}>Cancel</Button>
+        <Button
+          onClick={handleSubmit}
+          variant="contained"
+          disabled={sending || (messageType === 'chat' ? !chatId.trim() : !teamId.trim() || !channelId.trim()) || !body.trim()}
+        >
+          {sending ? 'Sending...' : 'Send Message'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   )
 }
 

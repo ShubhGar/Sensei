@@ -157,12 +157,22 @@ export const emailAPI = {
   authenticate: (authCode) =>
     api.post('/api/email/authenticate', null, {
       params: { auth_code: authCode }
+    }),
+  sendEmail: (to, subject, body, bodyType = 'text', cc = null, bcc = null, importance = 'normal') =>
+    api.post('/api/email/send', {
+      to,
+      subject,
+      body,
+      body_type: bodyType,
+      cc,
+      bcc,
+      importance
     })
 }
 
 // Teams API
 export const teamsAPI = {
-  getMessages: (maxResults = 50, chatType = 'chats', teamId = null, channelId = null, analyzeMentions = false, analyzeActivity = false) =>
+  getMessages: (maxResults = 50, chatType = 'chats', teamId = null, channelId = null, analyzeMentions = false, analyzeActivity = false, forceRefresh = false) =>
     api.get('/api/teams/messages', {
       params: { 
         max_results: maxResults, 
@@ -170,7 +180,8 @@ export const teamsAPI = {
         team_id: teamId, 
         channel_id: channelId,
         analyze_mentions: analyzeMentions,
-        analyze_activity: analyzeActivity
+        analyze_activity: analyzeActivity,
+        force_refresh: forceRefresh
       }
     }),
   getJoinedTeams: (maxResults = 100) =>
@@ -184,6 +195,14 @@ export const teamsAPI = {
   authenticate: (authCode) =>
     api.post('/api/teams/authenticate', null, {
       params: { auth_code: authCode }
+    }),
+  sendMessage: (chatId, teamId, channelId, content, contentType = 'text') =>
+    api.post('/api/teams/send-message', {
+      chat_id: chatId,
+      team_id: teamId,
+      channel_id: channelId,
+      content,
+      content_type: contentType
     })
 }
 

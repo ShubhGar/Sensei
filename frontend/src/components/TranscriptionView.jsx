@@ -18,12 +18,20 @@ import {
   Divider,
   Tabs,
   Tab,
-  InputAdornment
+  InputAdornment,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions
 } from '@mui/material'
 import MicIcon from '@mui/icons-material/Mic'
 import SummarizeIcon from '@mui/icons-material/Summarize'
 import HistoryIcon from '@mui/icons-material/History'
-import { transcriptionAPI, aiAPI, exportAPI } from '../services/api'
+import PauseIcon from '@mui/icons-material/Pause'
+import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import { transcriptionAPI, aiAPI, exportAPI, emailAPI } from '../services/api'
+import SendIcon from '@mui/icons-material/Send'
+import EmailIcon from '@mui/icons-material/Email'
 import { useTheme } from '../ThemeContext'
 
 const TranscriptionView = () => {
@@ -37,13 +45,18 @@ const TranscriptionView = () => {
   const [hasUserEdited, setHasUserEdited] = useState(false) // Track if user has manually edited
   const [title, setTitle] = useState('')
   const [isRecording, setIsRecording] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
   const [showOptions, setShowOptions] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [mom, setMom] = useState(null)
   const [faqs, setFaqs] = useState([])
   const [emailDraft, setEmailDraft] = useState(null)
+  const [editedEmailDraft, setEditedEmailDraft] = useState(null)
   const [risks, setRisks] = useState([])
+  const [sendEmailDialog, setSendEmailDialog] = useState({ open: false })
+  const [sendingEmail, setSendingEmail] = useState(false)
+  const [sendEmailError, setSendEmailError] = useState(null)
   const [audioSource, setAudioSource] = useState('user') // 'user', 'system', or 'both'
   const [voiceActivity, setVoiceActivity] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -55,6 +68,7 @@ const TranscriptionView = () => {
   const audioContextRef = useRef(null)
   const analyserRef = useRef(null)
   const animationFrameRef = useRef(null)
+  const isPausedRef = useRef(false)
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -160,7 +174,7 @@ const TranscriptionView = () => {
         const isVoiceActive = average > threshold
         setVoiceActivity(isVoiceActive)
         
-        if (isRecording) {
+        if (isRecording && !isPausedRef.current) {
           animationFrameRef.current = requestAnimationFrame(detectVoice)
         }
       }
@@ -175,6 +189,19 @@ const TranscriptionView = () => {
     setLoading(true)
     setError(null)
     try {
+      // Clear previous session data to start a new meeting
+      setFullTranscript('')
+      setEditedTranscript('')
+      setTranscript('')
+      setHasUserEdited(false)
+      setMom(null)
+      setFaqs([])
+      setEmailDraft(null)
+      setEditedEmailDraft(null)
+      setRisks([])
+      setIsPaused(false)
+      isPausedRef.current = false
+      
       // Start transcription session
       const response = await transcriptionAPI.startSession(title || 'Untitled Meeting')
       const newSessionId = response.data.id
@@ -214,8 +241,8 @@ const TranscriptionView = () => {
           mediaRecorderRef.current = mediaRecorder
           
           mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-              // Send audio data as binary
+            if (event.data.size > 0 && ws.readyState === WebSocket.OPEN && !isPausedRef.current) {
+              // Send audio data as binary (only when not paused)
               ws.send(event.data)
             }
           }
@@ -228,7 +255,7 @@ const TranscriptionView = () => {
           try {
             const data = JSON.parse(event.data)
             console.log('[User Microphone] WebSocket message received:', data.type, data)
-            if (data.type === 'transcript') {
+            if (data.type === 'final_transcript' || data.type === 'transcript') {
               console.log('[User Microphone] Received transcript:', data.speaker, data.text?.substring(0, 50))
               console.log('[User Microphone] Full transcript length:', data.full_transcript?.length || 0)
               // Use full_transcript from server which is already merged
@@ -238,7 +265,7 @@ const TranscriptionView = () => {
                 if (!hasUserEdited) {
                   setEditedTranscript(data.full_transcript)
                 }
-                console.log('[User Microphone] Updated fullTranscript state')
+                console.log('[User Microphone] Updated fullTranscript state:', data.full_transcript.substring(0, 100))
               }
               // Show latest transcript with speaker label
               if (data.speaker && data.text) {
@@ -286,6 +313,27 @@ const TranscriptionView = () => {
           if (audioSource === 'user') {
             setIsRecording(false)
           }
+          // Try to fetch transcript from API if we don't have it yet
+          if (sessionId && (!fullTranscript || fullTranscript.length === 0)) {
+            console.log('[User Microphone] WebSocket closed, fetching transcript from API as fallback')
+            setTimeout(async () => {
+              try {
+                const transcriptResponse = await transcriptionAPI.getTranscript(sessionId)
+                if (transcriptResponse.data && transcriptResponse.data.transcript) {
+                  const finalTranscript = transcriptResponse.data.transcript
+                  if (finalTranscript && finalTranscript.length > 0) {
+                    setFullTranscript(finalTranscript)
+                    if (!hasUserEdited) {
+                      setEditedTranscript(finalTranscript)
+                    }
+                    console.log('[User Microphone] Fetched transcript from API after WebSocket close:', finalTranscript.substring(0, 100))
+                  }
+                }
+              } catch (err) {
+                console.warn('[User Microphone] Could not fetch transcript from API:', err)
+              }
+            }, 2000) // Wait 2 seconds for backend to finish processing
+          }
         }
         
         wsRef.current = ws
@@ -304,7 +352,7 @@ const TranscriptionView = () => {
           try {
             const data = JSON.parse(event.data)
             console.log('[System Audio] WebSocket message received:', data.type, data)
-            if (data.type === 'transcript') {
+            if (data.type === 'final_transcript' || data.type === 'transcript') {
               console.log('[System Audio] Received transcript:', data.speaker, data.text?.substring(0, 50))
               console.log('[System Audio] Full transcript length:', data.full_transcript?.length || 0)
               // Use full_transcript from server which is already merged
@@ -367,14 +415,88 @@ const TranscriptionView = () => {
     }
   }
 
+  const pauseTranscription = () => {
+    if (!isRecording || isPaused) return
+    
+    // Pause MediaRecorder
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.pause()
+    }
+    
+    // Pause voice activity detection
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = null
+    }
+    
+    isPausedRef.current = true
+    setVoiceActivity(false)
+    setIsPaused(true)
+  }
+
+  const resumeTranscription = () => {
+    if (!isRecording || !isPaused) return
+    
+    // Resume MediaRecorder
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+      mediaRecorderRef.current.resume()
+    }
+    
+    isPausedRef.current = false
+    
+    // Resume voice activity detection if we have a stream
+    if (audioStreamRef.current && analyserRef.current) {
+      const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount)
+      const threshold = 30
+      
+      const detectVoice = () => {
+        if (!analyserRef.current || !isRecording || isPausedRef.current) return
+        
+        analyserRef.current.getByteFrequencyData(dataArray)
+        
+        let sum = 0
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i]
+        }
+        const average = sum / dataArray.length
+        
+        const isVoiceActive = average > threshold
+        setVoiceActivity(isVoiceActive)
+        
+        if (isRecording && !isPausedRef.current) {
+          animationFrameRef.current = requestAnimationFrame(detectVoice)
+        }
+      }
+      
+      detectVoice()
+    }
+    
+    setIsPaused(false)
+  }
+
   const stopTranscription = async () => {
     if (!sessionId) return
     
     setLoading(true)
     try {
-      // Stop media recorder
+      // First, request final data from MediaRecorder before stopping
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        // Request any remaining data
+        mediaRecorderRef.current.requestData()
+        // Wait a bit for the data to be sent
+        await new Promise(resolve => setTimeout(resolve, 500))
+        // Now stop the recorder
         mediaRecorderRef.current.stop()
+        // Wait a bit more for the final chunk to be sent
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+      
+      // Send stop signal to WebSocket to trigger final transcription
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'stop' }))
+      }
+      if (wsSystemRef.current && wsSystemRef.current.readyState === WebSocket.OPEN) {
+        wsSystemRef.current.send(JSON.stringify({ type: 'stop' }))
       }
       
       // Stop audio stream
@@ -394,23 +516,59 @@ const TranscriptionView = () => {
       }
       analyserRef.current = null
       setVoiceActivity(false)
+      setIsPaused(false)
+      isPausedRef.current = false
       
-      // Close WebSockets
+          // Wait longer for final transcription to complete (up to 10 seconds)
+          // The backend needs time to process accumulated audio and transcribe
+          await new Promise(resolve => setTimeout(resolve, 8000))
+          
+          // Clear save timeout if still pending
+          if (saveTimeoutRef.current) {
+            clearTimeout(saveTimeoutRef.current)
+            saveTimeoutRef.current = null
+          }
+      
+      // Close WebSockets after waiting
       if (wsRef.current) {
         wsRef.current.close()
         wsRef.current = null
       }
       if (wsSystemRef.current) {
-        // Send stop message for system audio
-        if (wsSystemRef.current.readyState === WebSocket.OPEN) {
-          wsSystemRef.current.send(JSON.stringify({ type: 'stop' }))
-        }
         wsSystemRef.current.close()
         wsSystemRef.current = null
       }
       
+      // Stop the session
       await transcriptionAPI.stopSession(sessionId)
       setIsRecording(false)
+      setIsPaused(false)
+      
+      // Fetch the final transcript from the API in case WebSocket message was missed
+      // Try multiple times with increasing delays
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)))
+          const transcriptResponse = await transcriptionAPI.getTranscript(sessionId)
+          if (transcriptResponse.data && transcriptResponse.data.transcript) {
+            const finalTranscript = transcriptResponse.data.transcript
+            if (finalTranscript && finalTranscript.length > 0) {
+              setFullTranscript(finalTranscript)
+              if (!hasUserEdited) {
+                setEditedTranscript(finalTranscript)
+              }
+              console.log('[Transcription] Fetched final transcript from API (attempt ' + (attempt + 1) + '):', finalTranscript.substring(0, 100))
+              break // Success, no need to retry
+            }
+          }
+        } catch (err) {
+          console.warn('[Transcription] Could not fetch transcript from API (attempt ' + (attempt + 1) + '):', err)
+          if (attempt === 2) {
+            // Last attempt failed, but not critical
+            console.warn('[Transcription] All attempts to fetch transcript failed, transcript might already be in state')
+          }
+        }
+      }
     } catch (err) {
       setError('Failed to stop transcription: ' + err.message)
     } finally {
@@ -469,6 +627,7 @@ const TranscriptionView = () => {
       setMom(response.data.mom)
       setFaqs(response.data.faqs || [])
       setEmailDraft(response.data.email_draft)
+      setEditedEmailDraft(response.data.email_draft)
       setRisks(response.data.risks || [])
     } catch (err) {
       setError('Failed to generate insights: ' + err.message)
@@ -780,48 +939,138 @@ const TranscriptionView = () => {
               </Button>
             ) : (
               <>
+                {!isPaused ? (
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    onClick={pauseTranscription}
+                    disabled={loading}
+                    startIcon={<PauseIcon />}
+                  >
+                    Pause
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    onClick={resumeTranscription}
+                    disabled={loading}
+                    startIcon={<PlayArrowIcon />}
+                  >
+                    Resume
+                  </Button>
+                )}
                 <Button
                   variant="contained"
-                  color="error"
                   onClick={stopTranscription}
                   disabled={loading}
+                  sx={{
+                    backgroundColor: '#d32f2f',
+                    color: 'white',
+                    '&:hover': {
+                      backgroundColor: '#b71c1c',
+                    },
+                    '&:disabled': {
+                      backgroundColor: 'rgba(211, 47, 47, 0.5)',
+                    },
+                  }}
                 >
                   Stop Recording
                 </Button>
                 {(audioSource === 'user' || audioSource === 'both') && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Box
-                      sx={{
-                        width: 14,
-                        height: 14,
-                        borderRadius: '50%',
-                        backgroundColor: voiceActivity ? '#009688' : '#9e9e9e',
-                        boxShadow: voiceActivity
-                          ? `0 0 10px #009688, 0 0 20px rgba(0, 150, 136, 0.5)`
-                          : 'none',
-                        transition: 'all 0.2s ease-in-out',
-                        animation: voiceActivity ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                        '@keyframes pulse': {
-                          '0%, 100%': {
-                            transform: 'scale(1)',
-                            opacity: 1,
-                          },
-                          '50%': {
-                            transform: 'scale(1.3)',
-                            opacity: 0.7,
-                          },
-                        },
-                      }}
-                    />
-                    <Typography 
-                      variant="body2" 
-                      sx={{ 
-                        color: voiceActivity ? 'primary.main' : 'text.secondary',
-                        fontWeight: voiceActivity ? 600 : 400,
-                      }}
-                    >
-                      {voiceActivity ? 'Voice detected' : 'Listening...'}
-                    </Typography>
+                    {!isPaused ? (
+                      <>
+                        <Box
+                          sx={{
+                            width: 16,
+                            height: 16,
+                            borderRadius: '50%',
+                            backgroundColor: voiceActivity ? '#4caf50' : '#9e9e9e',
+                            boxShadow: voiceActivity
+                              ? `0 0 12px #4caf50, 0 0 24px rgba(76, 175, 80, 0.4), 0 0 36px rgba(76, 175, 80, 0.2)`
+                              : `0 0 8px rgba(158, 158, 158, 0.3)`,
+                            transition: 'all 0.3s ease-in-out',
+                            animation: voiceActivity 
+                              ? 'pulseVoice 1.2s ease-in-out infinite' 
+                              : 'pulseListening 2s ease-in-out infinite',
+                            '@keyframes pulseVoice': {
+                              '0%, 100%': {
+                                transform: 'scale(1)',
+                                opacity: 1,
+                              },
+                              '50%': {
+                                transform: 'scale(1.4)',
+                                opacity: 0.8,
+                              },
+                            },
+                            '@keyframes pulseListening': {
+                              '0%, 100%': {
+                                transform: 'scale(1)',
+                                opacity: 0.6,
+                              },
+                              '50%': {
+                                transform: 'scale(1.2)',
+                                opacity: 0.9,
+                              },
+                            },
+                          }}
+                        />
+                        <Typography 
+                          variant="body2" 
+                          sx={{ 
+                            color: voiceActivity ? '#4caf50' : 'text.secondary',
+                            fontWeight: voiceActivity ? 600 : 400,
+                            animation: voiceActivity 
+                              ? 'none' 
+                              : 'fadeInOut 2s ease-in-out infinite',
+                            '@keyframes fadeInOut': {
+                              '0%, 100%': {
+                                opacity: 0.6,
+                              },
+                              '50%': {
+                                opacity: 1,
+                              },
+                            },
+                          }}
+                        >
+                          {voiceActivity ? 'Voice detected' : 'Listening...'}
+                        </Typography>
+                      </>
+                    ) : (
+                      <>
+                        <Box
+                          sx={{
+                            width: 16,
+                            height: 16,
+                            borderRadius: '50%',
+                            backgroundColor: '#ff9800',
+                            boxShadow: `0 0 8px rgba(255, 152, 0, 0.4)`,
+                            transition: 'all 0.3s ease-in-out',
+                            animation: 'pulsePaused 1.5s ease-in-out infinite',
+                            '@keyframes pulsePaused': {
+                              '0%, 100%': {
+                                transform: 'scale(1)',
+                                opacity: 0.7,
+                              },
+                              '50%': {
+                                transform: 'scale(1.1)',
+                                opacity: 1,
+                              },
+                            },
+                          }}
+                        />
+                        <Typography 
+                          variant="body2" 
+                          sx={{ 
+                            color: '#ff9800',
+                            fontWeight: 500,
+                          }}
+                        >
+                          Paused
+                        </Typography>
+                      </>
+                    )}
                   </Box>
                 )}
               </>
@@ -908,7 +1157,7 @@ const TranscriptionView = () => {
             />
             {/* Debug info in development */}
             {process.env.NODE_ENV === 'development' && (
-              <Box sx={{ mt: 2, p: 1, bgcolor: 'grey.100', borderRadius: 1, fontSize: '0.75rem' }}>
+              <Box sx={{ mt: 2, p: 1.5, bgcolor: mode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)', borderRadius: 2, fontSize: '0.75rem' }}>
                 <Typography variant="caption" component="div">
                   Debug: fullTranscript length: {fullTranscript.length}, transcript length: {transcript.length}
                   <br />
@@ -990,9 +1239,9 @@ const TranscriptionView = () => {
                       p: 1.5,
                       mb: 1,
                       bgcolor: 'background.default',
-                      borderRadius: 1,
+                      borderRadius: 2,
                       borderLeft: '3px solid',
-                      borderLeftColor: 'primary.light',
+                      borderLeftColor: 'primary.main',
                     }
                   }}
                 >
@@ -1030,7 +1279,7 @@ const TranscriptionView = () => {
                       p: 1.5,
                       mb: 1,
                       bgcolor: 'background.default',
-                      borderRadius: 1,
+                      borderRadius: 2,
                       borderLeft: '3px solid',
                       borderLeftColor: 'primary.main',
                     }
@@ -1080,12 +1329,12 @@ const TranscriptionView = () => {
               <Box 
                 key={idx} 
                 sx={{ 
-                  mb: 2.5,
+                  mb: 2,
                   p: 2,
                   bgcolor: 'background.default',
                   borderRadius: 2,
                   border: '1px solid',
-                  borderColor: 'secondary.light',
+                  borderColor: mode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
                 }}
               >
                 <Typography 
@@ -1125,47 +1374,227 @@ const TranscriptionView = () => {
           }}
         >
           <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 } }}>
-            <Typography 
-              variant="h6" 
-              gutterBottom
-              sx={{ 
-                fontWeight: 600,
-                color: 'text.primary',
-                mb: 2,
-              }}
-            >
-              Follow-up Email Draft
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography 
+                variant="h6" 
+                sx={{ 
+                  fontWeight: 600,
+                  color: 'text.primary',
+                }}
+              >
+                Follow-up Email Draft
+              </Typography>
+              <Button
+                variant="contained"
+                startIcon={<SendIcon />}
+                onClick={() => setSendEmailDialog({ open: true })}
+                sx={{ ml: 2 }}
+              >
+                Send Email
+              </Button>
+            </Box>
             <Box
               sx={{
                 bgcolor: 'background.default',
                 p: 2.5,
                 borderRadius: 2,
                 border: '1px solid',
-                borderColor: 'secondary.light',
+                borderColor: mode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
               }}
             >
-              <Typography 
-                variant="body2" 
-                component="pre" 
-                sx={{ 
-                  whiteSpace: 'pre-wrap',
-                  color: 'text.primary',
-                  lineHeight: 1.7,
-                  m: 0,
-                  fontFamily: 'inherit',
+              <TextField
+                fullWidth
+                label="To"
+                value={editedEmailDraft?.to ? editedEmailDraft.to.join(', ') : ''}
+                onChange={(e) => {
+                  const toList = e.target.value.split(',').map(email => email.trim()).filter(email => email)
+                  setEditedEmailDraft({ ...editedEmailDraft, to: toList })
                 }}
-              >
-                To: {emailDraft.to && emailDraft.to.length > 0 ? emailDraft.to.join(', ') : 'N/A'}
-{emailDraft.cc && emailDraft.cc.length > 0 ? `\nCC: ${emailDraft.cc.join(', ')}` : ''}
-{'\n'}Subject: {emailDraft.subject || 'No Subject'}
-
-{emailDraft.body || 'No body content'}
-              </Typography>
+                placeholder="email@example.com"
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                label="CC (optional)"
+                value={editedEmailDraft?.cc ? editedEmailDraft.cc.join(', ') : ''}
+                onChange={(e) => {
+                  const ccList = e.target.value ? e.target.value.split(',').map(email => email.trim()).filter(email => email) : []
+                  setEditedEmailDraft({ ...editedEmailDraft, cc: ccList })
+                }}
+                placeholder="email@example.com"
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                label="BCC (optional)"
+                value={editedEmailDraft?.bcc ? editedEmailDraft.bcc.join(', ') : ''}
+                onChange={(e) => {
+                  const bccList = e.target.value ? e.target.value.split(',').map(email => email.trim()).filter(email => email) : []
+                  setEditedEmailDraft({ ...editedEmailDraft, bcc: bccList })
+                }}
+                placeholder="email@example.com"
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                label="Subject"
+                value={editedEmailDraft?.subject || ''}
+                onChange={(e) => {
+                  setEditedEmailDraft({ ...editedEmailDraft, subject: e.target.value })
+                }}
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                multiline
+                rows={8}
+                label="Body"
+                value={editedEmailDraft?.body || ''}
+                onChange={(e) => {
+                  setEditedEmailDraft({ ...editedEmailDraft, body: e.target.value })
+                }}
+              />
             </Box>
           </CardContent>
         </Card>
       )}
+
+      {/* Send Email Dialog */}
+      <Dialog
+        open={sendEmailDialog.open}
+        onClose={() => {
+          setSendEmailDialog({ open: false })
+          setSendEmailError(null)
+        }}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            background: getCardBackground(),
+          }
+        }}
+      >
+        <DialogTitle
+          sx={{
+            bgcolor: 'primary.main',
+            color: 'white',
+            fontWeight: 600,
+            background: 'linear-gradient(135deg, #009688 0%, #00796B 100%)',
+          }}
+        >
+          Send Email
+        </DialogTitle>
+        <DialogContent sx={{ mt: 2 }}>
+          {sendEmailError && (
+            <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+              {sendEmailError}
+            </Alert>
+          )}
+          {editedEmailDraft && (
+            <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Review and send the email draft
+              </Typography>
+              <TextField
+                fullWidth
+                label="To"
+                value={editedEmailDraft.to ? editedEmailDraft.to.join(', ') : ''}
+                onChange={(e) => {
+                  const toList = e.target.value.split(',').map(email => email.trim()).filter(email => email)
+                  setEditedEmailDraft({ ...editedEmailDraft, to: toList })
+                }}
+                required
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                label="CC (optional)"
+                value={editedEmailDraft.cc ? editedEmailDraft.cc.join(', ') : ''}
+                onChange={(e) => {
+                  const ccList = e.target.value ? e.target.value.split(',').map(email => email.trim()).filter(email => email) : []
+                  setEditedEmailDraft({ ...editedEmailDraft, cc: ccList })
+                }}
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                label="BCC (optional)"
+                value={editedEmailDraft.bcc ? editedEmailDraft.bcc.join(', ') : ''}
+                onChange={(e) => {
+                  const bccList = e.target.value ? e.target.value.split(',').map(email => email.trim()).filter(email => email) : []
+                  setEditedEmailDraft({ ...editedEmailDraft, bcc: bccList })
+                }}
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                label="Subject"
+                value={editedEmailDraft.subject || ''}
+                onChange={(e) => {
+                  setEditedEmailDraft({ ...editedEmailDraft, subject: e.target.value })
+                }}
+                sx={{ mb: 2 }}
+              />
+              <TextField
+                fullWidth
+                multiline
+                rows={6}
+                label="Body"
+                value={editedEmailDraft.body || ''}
+                onChange={(e) => {
+                  setEditedEmailDraft({ ...editedEmailDraft, body: e.target.value })
+                }}
+              />
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button
+            onClick={() => {
+              setSendEmailDialog({ open: false })
+              setSendEmailError(null)
+            }}
+            disabled={sendingEmail}
+            variant="outlined"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!editedEmailDraft || !editedEmailDraft.to || editedEmailDraft.to.length === 0) {
+                setSendEmailError('Please enter at least one recipient')
+                return
+              }
+              setSendingEmail(true)
+              setSendEmailError(null)
+              try {
+                await emailAPI.sendEmail(
+                  editedEmailDraft.to,
+                  editedEmailDraft.subject || 'No Subject',
+                  editedEmailDraft.body || '',
+                  'text',
+                  editedEmailDraft.cc && editedEmailDraft.cc.length > 0 ? editedEmailDraft.cc : null,
+                  editedEmailDraft.bcc && editedEmailDraft.bcc.length > 0 ? editedEmailDraft.bcc : null,
+                  'normal'
+                )
+                setSendEmailDialog({ open: false })
+                setError(null)
+                alert('Email sent successfully!')
+              } catch (error) {
+                setSendEmailError(error.response?.data?.detail || error.message || 'Failed to send email')
+              } finally {
+                setSendingEmail(false)
+              }
+            }}
+            variant="contained"
+            disabled={sendingEmail || !editedEmailDraft || !editedEmailDraft.to || editedEmailDraft.to.length === 0}
+            startIcon={sendingEmail ? <CircularProgress size={16} /> : <SendIcon />}
+          >
+            {sendingEmail ? 'Sending...' : 'Send Email'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Risks */}
       {risks && risks.length > 0 && (
@@ -1196,7 +1625,7 @@ const TranscriptionView = () => {
                 sx={{ 
                   mb: 1.5,
                   borderRadius: 2,
-                  bgcolor: mode === 'dark' ? '#3A2A1E' : '#FFF8E1',
+                  bgcolor: mode === 'dark' ? 'rgba(255, 152, 0, 0.15)' : 'rgba(255, 152, 0, 0.1)',
                 }}
               >
                 {risk || 'Unknown risk'}

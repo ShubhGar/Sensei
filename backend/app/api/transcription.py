@@ -174,12 +174,18 @@ async def stop_session(
                     logger.error(f"[Transcription] Failed to commit session stop: {e}", exc_info=True)
                     raise
             else:
-                # Session not in DB means insights weren't generated - just remove from memory
-                logger.info(f"[Transcription] Session {session_id} stopped but not saved to DB (no insights). Transcript length: {transcript_len}, buffer: {buffer_len}")
+                # Session not in DB means insights weren't generated - keep in memory for now
+                # Session will be removed when insights are generated or manually cleaned up
+                active_data["session"]["is_active"] = False
+                active_data["full_transcript"] = merged_transcript  # Ensure merged transcript is stored
+                active_data["transcript_buffer"] = merged_transcript  # Also update buffer
+                logger.info(f"[Transcription] Session {session_id} stopped but kept in memory (no insights yet). Transcript length: {transcript_len}, buffer: {buffer_len}")
             
-            # Remove from active sessions
-            if session_id in active_sessions:
+            # Only remove from active sessions if session exists in DB (insights were already generated)
+            # Otherwise keep it in memory so transcript can be fetched and insights can be generated
+            if session and session_id in active_sessions:
                 del active_sessions[session_id]
+                logger.info(f"[Transcription] Removed session {session_id} from memory (insights already exist in DB)")
         else:
             logger.warning(f"[Transcription] Session {session_id} not in active_sessions")
             if session:
@@ -452,7 +458,7 @@ async def cleanup_meetings_without_insights(
 
 @router.websocket("/ws/{session_id}")
 async def websocket_transcription(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for real-time audio transcription"""
+    """WebSocket endpoint for final transcription (accumulates audio until done)"""
     logger.info(f"[Transcription] WebSocket connection opened for session {session_id}")
     await websocket.accept()
     
@@ -464,25 +470,18 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
     
     # Initialize variables outside try block for finally access
     full_transcript = ""
-    pcm_buffer = bytearray()  # Store PCM data instead of WebM
-    webm_buffer = bytearray()  # Accumulate WebM chunks - first chunk has initialization, subsequent are clusters
+    webm_buffer = bytearray()  # Accumulate all WebM chunks until transcription
     webm_header_end = 0  # Track where the WebM header ends (after first chunk)
-    # Use larger buffer for Whisper (better quality)
-    # 96000 bytes = ~6 seconds at 16kHz (better for Whisper - longer context improves accuracy)
-    buffer_size_threshold = 96000
-    pcm_buffer_max_size = 256000  # Maximum 250KB for PCM buffer to prevent memory issues
-    webm_buffer_max_size = 262144  # Maximum 256KB for WebM buffer
-    webm_buffer_min_size = 32768  # Minimum 32KB before attempting conversion
+    webm_buffer_max_size = 50 * 1024 * 1024  # Maximum 50MB for accumulated audio
     total_user_bytes = 0
     user_chunk_count = 0
-    last_conversion_attempt = 0  # Track last conversion attempt
-    last_transcription_attempt = 0  # Track last transcription attempt
+    is_recording = True
     WEBM_HEADER = b'\x1a\x45\xdf\xa3'  # WebM/Matroska EBML header
     
-    logger.info(f"[Audio Capture] User microphone WebSocket ready for session {session_id}")
+    logger.info(f"[Audio Capture] User microphone WebSocket ready for session {session_id} - Final transcription mode")
     
     try:
-        while True:
+        while is_recording:
             try:
                 # Receive audio data from client
                 data = await websocket.receive()
@@ -497,12 +496,13 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
             if "text" in data:
                 # Handle text messages (control messages)
                 message = json.loads(data["text"])
-                if message.get("type") == "close":
+                if message.get("type") == "close" or message.get("type") == "stop":
+                    logger.info(f"[Transcription] Received stop signal, processing final transcription")
+                    is_recording = False
                     break
             elif "bytes" in data:
                 # Handle binary audio data (WebM format from browser)
-                # MediaRecorder sends fragmented WebM: first chunk has initialization, subsequent are clusters
-                # We need to accumulate chunks to form a valid WebM stream
+                # Accumulate all chunks until we're done
                 webm_bytes = data["bytes"]
                 user_chunk_count += 1
                 total_user_bytes += len(webm_bytes)
@@ -512,177 +512,27 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
                 
                 # Track WebM header position (first chunk contains the header)
                 if user_chunk_count == 1 and webm_buffer.startswith(WEBM_HEADER):
-                    # Find where the header segment ends (roughly after first chunk)
-                    # The header is typically in the first few KB, but we'll track the first chunk size
                     webm_header_end = len(webm_buffer)
                     logger.debug(f"[Transcription] WebM header detected in first chunk, header end at position {webm_header_end}")
                 
-                # Prevent buffer overflow - preserve header if we have it
+                # Prevent buffer overflow
                 if len(webm_buffer) > webm_buffer_max_size:
-                    logger.warning(f"[Transcription] WebM buffer overflow detected ({len(webm_buffer)} bytes), preserving header and keeping recent data")
+                    logger.warning(f"[Transcription] WebM buffer overflow detected ({len(webm_buffer)} bytes), truncating")
                     if webm_header_end > 0 and webm_header_end < len(webm_buffer):
                         # Preserve header and keep recent data
                         header = webm_buffer[:webm_header_end]
                         recent_data = webm_buffer[-(webm_buffer_max_size - webm_header_end):]
                         webm_buffer = bytearray(header) + bytearray(recent_data)
                     else:
-                        # No header tracked, just keep recent data
-                        webm_buffer = webm_buffer[-131072:]
-                if len(pcm_buffer) > pcm_buffer_max_size:
-                    logger.warning(f"[Transcription] PCM buffer overflow detected ({len(pcm_buffer)} bytes), clearing buffer")
-                    pcm_buffer.clear()
+                        webm_buffer = webm_buffer[-webm_buffer_max_size:]
                 
-                # Continuous real-time logging - log every chunk
+                # Log periodically (every 10 chunks) instead of every chunk
                 if user_chunk_count == 1:
-                    logger.info(f"[Audio Capture] 🎙️ User microphone capture started - Chunk #{user_chunk_count}: {len(webm_bytes)} bytes | WebM Buffer: {len(webm_buffer)} bytes | PCM Buffer: {len(pcm_buffer)} bytes | Total: {total_user_bytes} bytes")
-                else:
-                    # Log every chunk at INFO level for continuous visibility
-                    logger.info(f"[Audio Capture] 🎙️ Chunk #{user_chunk_count}: {len(webm_bytes)} bytes | WebM Buffer: {len(webm_buffer)} bytes | PCM Buffer: {len(pcm_buffer)} bytes | Total: {total_user_bytes} bytes")
-                
-                # Convert accumulated WebM buffer when we have enough data
-                # MediaRecorder fragments need to be accumulated to form a valid WebM stream
-                should_convert = (
-                    len(webm_buffer) >= webm_buffer_min_size and
-                    (user_chunk_count - last_conversion_attempt >= 3 or len(webm_buffer) >= webm_buffer_max_size)
-                )
-                
-                if should_convert:
-                    last_conversion_attempt = user_chunk_count
-                    # Convert accumulated WebM chunks (first chunk has initialization, rest are clusters)
-                    webm_data_to_convert = bytes(webm_buffer)
-                    # Save original buffer state before modifying
-                    original_buffer = bytearray(webm_buffer)
-                    
-                    # Keep overlap to maintain WebM structure continuity
-                    # Preserve header if we have it, otherwise keep last 32KB
-                    overlap_size = 32768
-                    if webm_header_end > 0 and webm_header_end < len(webm_buffer):
-                        # Preserve header and keep recent data for overlap
-                        header = webm_buffer[:webm_header_end]
-                        if len(webm_buffer) > webm_header_end + overlap_size:
-                            recent_data = webm_buffer[-(overlap_size):]
-                            webm_buffer = bytearray(header) + bytearray(recent_data)
-                        else:
-                            # Not enough data to overlap, keep everything
-                            pass
-                    elif len(webm_buffer) > overlap_size:
-                        # No header tracked, just keep last overlap_size
-                        webm_buffer = webm_buffer[-overlap_size:]
-                    else:
-                        # Buffer too small, keep everything
-                        pass
-                    
-                    logger.info(f"[Transcription] 🔄 Attempting WebM to PCM conversion - Accumulated buffer size: {len(webm_data_to_convert)} bytes")
-                    pcm_chunk = await transcription_service.convert_webm_to_pcm(webm_data_to_convert)
-                    
-                    if pcm_chunk:
-                        logger.info(f"[Transcription] ✅ WebM conversion successful! PCM size: {len(pcm_chunk)} bytes")
-                        # Accumulate PCM data (PCM can be safely concatenated)
-                        pcm_buffer.extend(pcm_chunk)
-                        
-                        # Transcribe when PCM buffer reaches threshold, or if we have accumulated some data
-                        # and it's been a while since last transcription (to avoid losing audio)
-                        should_transcribe = (
-                            len(pcm_buffer) >= buffer_size_threshold or
-                            (len(pcm_buffer) >= buffer_size_threshold // 2 and 
-                             user_chunk_count - last_transcription_attempt >= 10)
-                        )
-                        
-                        if should_transcribe:
-                            chunk_to_transcribe = bytes(pcm_buffer)
-                            buffer_size = len(chunk_to_transcribe)
-                            pcm_buffer.clear()
-                            last_transcription_attempt = user_chunk_count
-                            
-                            logger.info(f"[Transcription] 📝 Processing User audio chunk for transcription - Size: {buffer_size} bytes (PCM)")
-                            # Transcribe PCM audio chunk (force English language)
-                            transcript = await transcription_service.transcribe_audio_chunk(chunk_to_transcribe, language='en', audio_format='pcm')
-                            if transcript:
-                                logger.info(f"[Transcription] ✅ User Transcript: {transcript[:100]}...")
-                            else:
-                                logger.warning(f"[Transcription] ⚠️ No transcript generated for this chunk")
-                                # Send error message to client if transcription service is not available (only once)
-                                if not transcription_service.local_model and not transcription_service._transcription_warning_logged:
-                                    try:
-                                        await websocket.send_json({
-                                            "type": "error",
-                                            "message": "Transcription service not configured. Whisper model not loaded. Check backend logs for details."
-                                        })
-                                    except:
-                                        pass
-                            
-                            if transcript and transcript.strip():
-                                # Get current timestamp using time.time() for consistency
-                                timestamp = time.time()
-                                
-                                # Store transcript with timestamp in user_transcripts (with lock)
-                                async with get_active_sessions_lock():
-                                    if session_id in active_sessions:
-                                        active_data = active_sessions[session_id]
-                                        active_data["user_transcripts"].append((timestamp, transcript))
-                                        logger.info(f"[Transcription] 📝 Stored User transcript: {transcript[:50]}... (Total user transcripts: {len(active_data['user_transcripts'])})")
-                                        
-                                        # Merge all transcripts chronologically
-                                        user_transcripts = active_data.get("user_transcripts", [])
-                                        audience_transcripts = active_data.get("audience_transcripts", [])
-                                        merged_transcript = merge_transcripts_with_labels(user_transcripts, audience_transcripts)
-                                        
-                                        active_data["full_transcript"] = merged_transcript
-                                        # Accumulate transcript in buffer (keep recent transcripts)
-                                        if active_data["transcript_buffer"]:
-                                            active_data["transcript_buffer"] += " " + transcript
-                                        else:
-                                            active_data["transcript_buffer"] = transcript
-                                        
-                                        # Get full_transcript for sending (while holding lock)
-                                        full_transcript_to_send = active_data["full_transcript"]
-                                    else:
-                                        full_transcript_to_send = ""
-                                
-                                # Send transcript back to client with speaker label
-                                try:
-                                    message = {
-                                        "type": "transcript",
-                                        "speaker": "User",
-                                        "text": transcript,
-                                        "full_transcript": full_transcript_to_send
-                                    }
-                                    await websocket.send_json(message)
-                                    logger.info(f"[Transcription] ✅ Sent User transcript to client: {transcript[:50]}... (full_transcript length: {len(full_transcript_to_send)})")
-                                except (WebSocketDisconnect, RuntimeError) as e:
-                                    logger.warning(f"[Transcription] Failed to send transcript to client: {e}")
-                                    break
-                                except Exception as e:
-                                    logger.error(f"[Transcription] Unexpected error sending transcript: {e}", exc_info=True)
-                                    break
-                    else:
-                        logger.warning(f"[Transcription] ⚠️ WebM conversion failed for accumulated buffer ({len(webm_data_to_convert)} bytes) - will retry with more data")
-                        # Restore original buffer if conversion failed (preserve header if we have it)
-                        if len(original_buffer) < webm_buffer_max_size * 2:
-                            # Restore the original buffer
-                            webm_buffer = original_buffer
-                        else:
-                            logger.warning(f"[Transcription] WebM buffer too large after failed conversion, preserving header and keeping recent data")
-                            if webm_data_to_convert.startswith(WEBM_HEADER):
-                                # Keep header and recent data
-                                if webm_header_end > 0 and webm_header_end < len(webm_data_to_convert):
-                                    header = webm_data_to_convert[:webm_header_end]
-                                    recent_data = webm_data_to_convert[-(webm_buffer_max_size - webm_header_end):]
-                                    webm_buffer = bytearray(header) + bytearray(recent_data)
-                                else:
-                                    # Try to find header
-                                    header_pos = webm_data_to_convert.find(WEBM_HEADER)
-                                    if header_pos >= 0:
-                                        # Estimate header size (typically 1-4KB)
-                                        estimated_header_size = min(4096, len(webm_data_to_convert) // 4)
-                                        header = webm_data_to_convert[header_pos:header_pos + estimated_header_size]
-                                        recent_data = webm_data_to_convert[-(webm_buffer_max_size - estimated_header_size):]
-                                        webm_buffer = bytearray(header) + bytearray(recent_data)
-                                    else:
-                                        webm_buffer = bytearray(webm_data_to_convert[-webm_buffer_max_size:])
-                            else:
-                                webm_buffer = bytearray(webm_data_to_convert[-webm_buffer_max_size:])
+                    logger.info(f"[Audio Capture] 🎙️ User microphone capture started - Chunk #{user_chunk_count}: {len(webm_bytes)} bytes | WebM Buffer: {len(webm_buffer)} bytes | Total: {total_user_bytes} bytes")
+                elif user_chunk_count % 10 == 0:
+                    logger.info(f"[Audio Capture] 🎙️ Chunk #{user_chunk_count}: {len(webm_bytes)} bytes | WebM Buffer: {len(webm_buffer)} bytes | Total: {total_user_bytes} bytes")
             elif "close" in data:
+                is_recording = False
                 break
                 
     except WebSocketDisconnect:
@@ -696,33 +546,70 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
         except:
             pass
     finally:
-        # Process any remaining WebM buffer
-        if webm_buffer and len(webm_buffer) > webm_buffer_min_size:
+        # Process accumulated audio for final transcription
+        if webm_buffer and len(webm_buffer) > 1000:  # Minimum size check
             try:
-                logger.info(f"[Transcription] Processing remaining WebM buffer: {len(webm_buffer)} bytes")
-                pcm_chunk = await transcription_service.convert_webm_to_pcm(bytes(webm_buffer))
-                if pcm_chunk:
-                    pcm_buffer.extend(pcm_chunk)
+                logger.info(f"[Transcription] Processing final accumulated audio - WebM buffer: {len(webm_buffer)} bytes")
+                
+                # Convert entire WebM buffer to PCM
+                pcm_data = await transcription_service.convert_webm_to_pcm(bytes(webm_buffer))
+                
+                if pcm_data and len(pcm_data) > 0:
+                    logger.info(f"[Transcription] ✅ WebM conversion successful! PCM size: {len(pcm_data)} bytes")
+                    
+                    # Transcribe the entire accumulated audio
+                    logger.info(f"[Transcription] 📝 Starting final transcription of accumulated audio")
+                    transcript = await transcription_service.transcribe_audio_chunk(pcm_data, language='en', audio_format='pcm')
+                    
+                    if transcript and transcript.strip():
+                        timestamp = time.time()
+                        
+                        # Store transcript with timestamp in user_transcripts (with lock)
+                        async with get_active_sessions_lock():
+                            if session_id in active_sessions:
+                                active_data = active_sessions[session_id]
+                                active_data["user_transcripts"].append((timestamp, transcript))
+                                logger.info(f"[Transcription] 📝 Stored final User transcript: {transcript[:100]}...")
+                                
+                                # Merge all transcripts chronologically
+                                user_transcripts = active_data.get("user_transcripts", [])
+                                audience_transcripts = active_data.get("audience_transcripts", [])
+                                merged_transcript = merge_transcripts_with_labels(user_transcripts, audience_transcripts)
+                                
+                                active_data["full_transcript"] = merged_transcript
+                                active_data["transcript_buffer"] = transcript
+                                
+                                # Send final transcript back to client
+                                try:
+                                    message = {
+                                        "type": "final_transcript",
+                                        "speaker": "User",
+                                        "text": transcript,
+                                        "full_transcript": merged_transcript
+                                    }
+                                    await websocket.send_json(message)
+                                    logger.info(f"[Transcription] ✅ Sent final User transcript to client: {transcript[:100]}... (full_transcript length: {len(merged_transcript)})")
+                                except (WebSocketDisconnect, RuntimeError) as e:
+                                    logger.warning(f"[Transcription] Failed to send final transcript to client: {e}")
+                                except Exception as e:
+                                    logger.error(f"[Transcription] Unexpected error sending final transcript: {e}", exc_info=True)
+                    else:
+                        logger.warning(f"[Transcription] ⚠️ No transcript generated from accumulated audio")
+                        # Send error message to client if transcription service is not available
+                        if not transcription_service.local_model:
+                            try:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Transcription service not configured. Whisper model not loaded. Check backend logs for details."
+                                })
+                            except:
+                                pass
+                else:
+                    logger.warning(f"[Transcription] ⚠️ WebM to PCM conversion failed or produced empty output")
             except Exception as e:
-                logger.warning(f"[Transcription] Failed to convert remaining WebM buffer: {e}")
-        
-        # Process any remaining audio in PCM buffer
-        if pcm_buffer and len(pcm_buffer) > 1000:
-            try:
-                transcript = await transcription_service.transcribe_audio_chunk(bytes(pcm_buffer), language='en', audio_format='pcm')
-                if transcript and transcript.strip():
-                    timestamp = time.time()
-                    async with get_active_sessions_lock():
-                        if session_id in active_sessions:
-                            active_data = active_sessions[session_id]
-                            active_data["user_transcripts"].append((timestamp, transcript))
-                            # Merge all transcripts
-                            user_transcripts = active_data.get("user_transcripts", [])
-                            audience_transcripts = active_data.get("audience_transcripts", [])
-                            merged_transcript = merge_transcripts_with_labels(user_transcripts, audience_transcripts)
-                            active_data["full_transcript"] = merged_transcript
-            except Exception as e:
-                logger.warning(f"[Transcription] Error processing remaining PCM buffer: {e}")
+                logger.error(f"[Transcription] Error processing final accumulated audio: {e}", exc_info=True)
+        else:
+            logger.info(f"[Transcription] No audio accumulated to transcribe (buffer size: {len(webm_buffer) if webm_buffer else 0} bytes)")
         
         # Don't update database here - only update memory
         # Database will be updated when insights are generated or session is stopped (if insights exist)
@@ -744,7 +631,7 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
 
 @router.websocket("/ws-system/{session_id}")
 async def websocket_system_audio_transcription(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for real-time system audio transcription"""
+    """WebSocket endpoint for final system audio transcription (accumulates audio until done)"""
     logger.info(f"[Transcription] System audio WebSocket connection opened for session {session_id}")
     await websocket.accept()
     
@@ -756,11 +643,8 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
     
     # Initialize variables
     full_transcript = ""
-    audio_buffer = bytearray()
-    # Use larger buffer for Whisper (better quality)
-    # 96000 bytes = ~6 seconds at 16kHz (better for Whisper - longer context improves accuracy)
-    buffer_size_threshold = 96000
-    audio_buffer_max_size = 256000  # Maximum 250KB for audio buffer to prevent memory issues
+    audio_buffer = bytearray()  # Accumulate all audio until transcription
+    audio_buffer_max_size = 50 * 1024 * 1024  # Maximum 50MB for accumulated audio
     capture_task = None
     total_system_bytes = 0
     system_chunk_count = 0
@@ -770,115 +654,30 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
         logger.info(f"[Transcription] Starting system audio capture for session {session_id}")
         audio_capture_service.is_recording = True
         
-        # Create a task to handle audio capture
-        async def capture_and_transcribe():
-            nonlocal full_transcript, audio_buffer, total_system_bytes, system_chunk_count
+        # Create a task to handle audio capture (just accumulate, don't transcribe)
+        async def capture_audio():
+            nonlocal audio_buffer, total_system_bytes, system_chunk_count
             
             try:
                 async for audio_chunk in audio_capture_service.start_capture():
                     if not audio_capture_service.is_recording:
                         break
                     
-                    # Prevent buffer overflow - clear if too large
+                    # Prevent buffer overflow
                     if len(audio_buffer) > audio_buffer_max_size:
-                        logger.warning(f"[Transcription] Audio buffer overflow detected ({len(audio_buffer)} bytes), clearing buffer")
-                        audio_buffer.clear()
+                        logger.warning(f"[Transcription] Audio buffer overflow detected ({len(audio_buffer)} bytes), truncating")
+                        audio_buffer = audio_buffer[-audio_buffer_max_size:]
                     
                     # Accumulate audio chunks
                     audio_buffer.extend(audio_chunk)
                     system_chunk_count += 1
                     total_system_bytes += len(audio_chunk)
                     
-                    # Continuous real-time logging - log every chunk
+                    # Log periodically (every 10 chunks) instead of every chunk
                     if system_chunk_count == 1:
-                        logger.info(f"[Audio Capture] 🎤 System audio capture started - Chunk #{system_chunk_count}: {len(audio_chunk)} bytes | Total: {total_system_bytes} bytes")
-                    else:
-                        # Log every chunk at INFO level for continuous visibility
+                        logger.info(f"[Audio Capture] 🎤 System audio capture started - Chunk #{system_chunk_count}: {len(audio_chunk)} bytes | Buffer: {len(audio_buffer)} bytes | Total: {total_system_bytes} bytes")
+                    elif system_chunk_count % 10 == 0:
                         logger.info(f"[Audio Capture] 🎤 Chunk #{system_chunk_count}: {len(audio_chunk)} bytes | Buffer: {len(audio_buffer)} bytes | Total: {total_system_bytes} bytes")
-                    
-                    # Transcribe when buffer reaches threshold
-                    if len(audio_buffer) >= buffer_size_threshold:
-                        chunk_to_transcribe = bytes(audio_buffer)
-                        buffer_size = len(chunk_to_transcribe)
-                        audio_buffer.clear()
-                        
-                        # Log audio characteristics before transcription
-                        audio_np = np.frombuffer(chunk_to_transcribe, dtype=np.int16).astype(np.float32) / 32768.0
-                        audio_max = np.abs(audio_np).max()
-                        audio_rms = np.sqrt(np.mean(audio_np**2))
-                        audio_std = np.std(audio_np)
-                        logger.info(f"[Transcription] 📝 Processing system audio chunk - Size: {buffer_size} bytes | Max: {audio_max:.4f}, RMS: {audio_rms:.4f}, Std: {audio_std:.4f}")
-                        
-                        # Pre-validate audio before transcription - reject only if BOTH max and RMS are too low
-                        # Use more lenient thresholds for system audio (which may have lower RMS even when audio is playing)
-                        silence_threshold_max = 0.03  # 3% of full scale (more lenient)
-                        silence_threshold_rms = 0.01   # 1% RMS (more lenient for system audio)
-                        # Use AND logic: only skip if BOTH conditions are true (both max and RMS are low)
-                        if audio_max < silence_threshold_max and audio_rms < silence_threshold_rms:
-                            logger.info(f"[Transcription] ⚠️ Skipping transcription - audio too quiet (max: {audio_max:.4f}, RMS: {audio_rms:.4f})")
-                            audio_buffer.clear()  # Clear buffer to prevent accumulation
-                            continue
-                        
-                        # Transcribe audio chunk (system audio is raw PCM, force English language)
-                        transcript = await transcription_service.transcribe_audio_chunk(chunk_to_transcribe, language='en', audio_format='pcm')
-                        if transcript:
-                            logger.info(f"[Transcription] ✅ Audience Transcript: {transcript[:100]}...")
-                        else:
-                            logger.info(f"[Transcription] ⚠️ No transcript generated (likely silence/noise filtered out)")
-                            # Send error message to client if transcription service is not available
-                            if not transcription_service.local_model:
-                                try:
-                                    await websocket.send_json({
-                                        "type": "error",
-                                        "message": "Transcription service not configured. Whisper model not loaded. Check backend logs for details."
-                                    })
-                                except:
-                                    pass
-                        
-                        if transcript and transcript.strip():
-                            # Get current timestamp using time.time() for consistency
-                            timestamp = time.time()
-                            
-                            # Store transcript with timestamp in audience_transcripts (with lock)
-                            async with get_active_sessions_lock():
-                                if session_id in active_sessions:
-                                    active_data = active_sessions[session_id]
-                                    active_data["audience_transcripts"].append((timestamp, transcript))
-                                    logger.info(f"[Transcription] 📝 Stored Audience transcript: {transcript[:50]}... (Total audience transcripts: {len(active_data['audience_transcripts'])})")
-                                    
-                                    # Merge all transcripts chronologically
-                                    user_transcripts = active_data.get("user_transcripts", [])
-                                    audience_transcripts = active_data.get("audience_transcripts", [])
-                                    merged_transcript = merge_transcripts_with_labels(user_transcripts, audience_transcripts)
-                                    
-                                    active_data["full_transcript"] = merged_transcript
-                                    # Accumulate transcript in buffer (keep recent transcripts)
-                                    if active_data["transcript_buffer"]:
-                                        active_data["transcript_buffer"] += " " + transcript
-                                    else:
-                                        active_data["transcript_buffer"] = transcript
-                                    
-                                    # Get full_transcript for sending (while holding lock)
-                                    full_transcript_to_send = active_data["full_transcript"]
-                                else:
-                                    full_transcript_to_send = ""
-                            
-                            # Send transcript back to client with speaker label
-                            try:
-                                message = {
-                                    "type": "transcript",
-                                    "speaker": "Audience",
-                                    "text": transcript,
-                                    "full_transcript": full_transcript_to_send
-                                }
-                                await websocket.send_json(message)
-                                logger.info(f"[Transcription] ✅ Sent Audience transcript to client: {transcript[:50]}... (full_transcript length: {len(full_transcript_to_send)})")
-                            except (WebSocketDisconnect, RuntimeError) as e:
-                                logger.warning(f"[Transcription] Failed to send transcript to client: {e}")
-                                break
-                            except Exception as e:
-                                logger.error(f"[Transcription] Unexpected error sending transcript: {e}", exc_info=True)
-                                break
             except RuntimeError as e:
                 # RuntimeError from AudioCaptureService (e.g., no device found)
                 error_msg = str(e)
@@ -903,7 +702,7 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
                     pass
         
         # Start the capture task
-        capture_task = asyncio.create_task(capture_and_transcribe())
+        capture_task = asyncio.create_task(capture_audio())
         
         # Listen for control messages from client
         while True:
@@ -948,23 +747,62 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
             except asyncio.CancelledError:
                 pass
         
-        # Process any remaining audio in buffer
-        if audio_buffer and len(audio_buffer) > 1000:
+        # Process accumulated audio for final transcription
+        if audio_buffer and len(audio_buffer) > 1000:  # Minimum size check
             try:
+                logger.info(f"[Transcription] Processing final accumulated system audio - Buffer: {len(audio_buffer)} bytes")
+                
+                # Transcribe the entire accumulated audio
+                logger.info(f"[Transcription] 📝 Starting final transcription of accumulated system audio")
                 transcript = await transcription_service.transcribe_audio_chunk(bytes(audio_buffer), language='en', audio_format='pcm')
+                
                 if transcript and transcript.strip():
                     timestamp = time.time()
+                    
+                    # Store transcript with timestamp in audience_transcripts (with lock)
                     async with get_active_sessions_lock():
                         if session_id in active_sessions:
                             active_data = active_sessions[session_id]
                             active_data["audience_transcripts"].append((timestamp, transcript))
-                            # Merge all transcripts
+                            logger.info(f"[Transcription] 📝 Stored final Audience transcript: {transcript[:100]}...")
+                            
+                            # Merge all transcripts chronologically
                             user_transcripts = active_data.get("user_transcripts", [])
                             audience_transcripts = active_data.get("audience_transcripts", [])
                             merged_transcript = merge_transcripts_with_labels(user_transcripts, audience_transcripts)
+                            
                             active_data["full_transcript"] = merged_transcript
+                            active_data["transcript_buffer"] = transcript
+                            
+                            # Send final transcript back to client
+                            try:
+                                message = {
+                                    "type": "final_transcript",
+                                    "speaker": "Audience",
+                                    "text": transcript,
+                                    "full_transcript": merged_transcript
+                                }
+                                await websocket.send_json(message)
+                                logger.info(f"[Transcription] ✅ Sent final Audience transcript to client: {transcript[:100]}... (full_transcript length: {len(merged_transcript)})")
+                            except (WebSocketDisconnect, RuntimeError) as e:
+                                logger.warning(f"[Transcription] Failed to send final transcript to client: {e}")
+                            except Exception as e:
+                                logger.error(f"[Transcription] Unexpected error sending final transcript: {e}", exc_info=True)
+                else:
+                    logger.warning(f"[Transcription] ⚠️ No transcript generated from accumulated system audio")
+                    # Send error message to client if transcription service is not available
+                    if not transcription_service.local_model:
+                        try:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "Transcription service not configured. Whisper model not loaded. Check backend logs for details."
+                            })
+                        except:
+                            pass
             except Exception as e:
-                logger.warning(f"[Transcription] Error processing remaining audio buffer: {e}")
+                logger.error(f"[Transcription] Error processing final accumulated system audio: {e}", exc_info=True)
+        else:
+            logger.info(f"[Transcription] No system audio accumulated to transcribe (buffer size: {len(audio_buffer) if audio_buffer else 0} bytes)")
         
         # Don't update database here - only update memory
         # Database will be updated when insights are generated or session is stopped (if insights exist)

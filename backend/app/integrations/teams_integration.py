@@ -45,12 +45,21 @@ class TeamsIntegration:
         self._chat_permissions_missing = False
         logger.info("[Teams] Permission failure cache reset")
     
-    async def get_chats(self, max_results: int = 50) -> Dict[str, Any]:
+    async def get_chats(self, max_results: int = 50, force_refresh: bool = False) -> Dict[str, Any]:
         """Get Teams chat messages
+        
+        Args:
+            max_results: Maximum number of messages to return
+            force_refresh: If True, reset permission cache and force API call
         
         Returns:
             Dict with 'messages' list and optional 'error' and 'error_type' fields
         """
+        # If force_refresh is True, reset the permission cache
+        if force_refresh:
+            logger.info("[Teams] Force refresh requested - resetting permission cache")
+            self._chat_permissions_missing = False
+        
         # If we've already determined that Chat permissions are missing, skip API call
         if self._chat_permissions_missing:
             logger.debug("[Teams] Chat permissions missing (cached), using dummy data without API call")
@@ -617,6 +626,187 @@ class TeamsIntegration:
             "teams_summary": teams_summary,
             "messages": messages
         }
+    
+    async def send_chat_message(
+        self,
+        chat_id: str,
+        content: str,
+        content_type: str = "text"  # "text" or "html"
+    ) -> Dict[str, Any]:
+        """Send a message to a Teams chat
+        
+        Args:
+            chat_id: The Teams chat ID
+            content: Message content
+            content_type: "text" or "html"
+        
+        Returns:
+            Dict with message_id and status
+        """
+        # Get token from stored OAuth tokens
+        from app.api.auth import get_microsoft_token
+        self.token = await get_microsoft_token()
+        
+        # Validate token
+        if not self.token or not self.token.strip():
+            logger.warning("[Teams] No authentication token available for sending message")
+            raise ValueError("No authentication token available. Please authenticate with Microsoft first.")
+        
+        token_clean = self.token.strip()
+        if len(token_clean) < 50:
+            logger.warning(f"[Teams] Token appears to be invalid (too short: {len(token_clean)} chars)")
+            raise ValueError("Authentication token is invalid. Please re-authenticate.")
+        
+        auth_header = f"Bearer {token_clean}"
+        
+        # Build message payload
+        message_payload = {
+            "body": {
+                "contentType": content_type,
+                "content": content
+            }
+        }
+        
+        try:
+            url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages"
+            timeout = httpx.Timeout(30.0, connect=15.0)
+            
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Authorization": auth_header,
+                        "Content-Type": "application/json"
+                    },
+                    json=message_payload
+                )
+                
+                if response.status_code in [401, 403]:
+                    error_body = response.text
+                    try:
+                        error_json = response.json()
+                        error_code = error_json.get("error", {}).get("code", "")
+                        error_message = error_json.get("error", {}).get("message", "")
+                        logger.warning(
+                            f"[Teams] Authentication error sending chat message ({response.status_code}): {error_code} - {error_message}"
+                        )
+                        raise ValueError(f"Authentication error: {error_message}. Please ensure you have Chat.Send permissions.")
+                    except:
+                        raise ValueError(f"Authentication error (status {response.status_code}): {error_body}")
+                
+                if response.status_code not in [200, 201]:
+                    error_body = response.text
+                    logger.error(f"[Teams] Error sending chat message (status {response.status_code}): {error_body}")
+                    response.raise_for_status()
+                
+                response_data = response.json()
+                message_id = response_data.get("id")
+                
+                logger.info(f"[Teams] Successfully sent message to chat {chat_id}")
+                return {
+                    "status": "sent",
+                    "message": "Message sent successfully",
+                    "message_id": message_id,
+                    "chat_id": chat_id
+                }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[Teams] HTTP error sending chat message: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[Teams] Error sending chat message: {e}")
+            raise
+    
+    async def send_channel_message(
+        self,
+        team_id: str,
+        channel_id: str,
+        content: str,
+        content_type: str = "text"  # "text" or "html"
+    ) -> Dict[str, Any]:
+        """Send a message to a Teams channel
+        
+        Args:
+            team_id: The Teams team ID
+            channel_id: The Teams channel ID
+            content: Message content
+            content_type: "text" or "html"
+        
+        Returns:
+            Dict with message_id and status
+        """
+        # Get token from stored OAuth tokens
+        from app.api.auth import get_microsoft_token
+        self.token = await get_microsoft_token()
+        
+        # Validate token
+        if not self.token or not self.token.strip():
+            logger.warning("[Teams] No authentication token available for sending channel message")
+            raise ValueError("No authentication token available. Please authenticate with Microsoft first.")
+        
+        token_clean = self.token.strip()
+        if len(token_clean) < 50:
+            logger.warning(f"[Teams] Token appears to be invalid (too short: {len(token_clean)} chars)")
+            raise ValueError("Authentication token is invalid. Please re-authenticate.")
+        
+        auth_header = f"Bearer {token_clean}"
+        
+        # Build message payload
+        message_payload = {
+            "body": {
+                "contentType": content_type,
+                "content": content
+            }
+        }
+        
+        try:
+            url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages"
+            timeout = httpx.Timeout(30.0, connect=15.0)
+            
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Authorization": auth_header,
+                        "Content-Type": "application/json"
+                    },
+                    json=message_payload
+                )
+                
+                if response.status_code in [401, 403]:
+                    error_body = response.text
+                    try:
+                        error_json = response.json()
+                        error_code = error_json.get("error", {}).get("code", "")
+                        error_message = error_json.get("error", {}).get("message", "")
+                        logger.warning(
+                            f"[Teams] Authentication error sending channel message ({response.status_code}): {error_code} - {error_message}"
+                        )
+                        raise ValueError(f"Authentication error: {error_message}. Please ensure you have ChannelMessage.Send permissions.")
+                    except:
+                        raise ValueError(f"Authentication error (status {response.status_code}): {error_body}")
+                
+                if response.status_code not in [200, 201]:
+                    error_body = response.text
+                    logger.error(f"[Teams] Error sending channel message (status {response.status_code}): {error_body}")
+                    response.raise_for_status()
+                
+                response_data = response.json()
+                message_id = response_data.get("id")
+                
+                logger.info(f"[Teams] Successfully sent message to channel {channel_id} in team {team_id}")
+                return {
+                    "status": "sent",
+                    "message": "Message sent successfully",
+                    "message_id": message_id,
+                    "team_id": team_id,
+                    "channel_id": channel_id
+                }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[Teams] HTTP error sending channel message: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[Teams] Error sending channel message: {e}")
+            raise
 
 
 

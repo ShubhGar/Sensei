@@ -1,5 +1,7 @@
 """
-Real-time transcription service using Whisper
+Real-time transcription service using faster-whisper
+Note: VAD (Voice Activity Detection) is disabled as it requires onnxruntime,
+which is not yet available for Python 3.14
 """
 import asyncio
 import numpy as np
@@ -13,60 +15,127 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 try:
-    import whisper
+    from faster_whisper import WhisperModel
 except ImportError:
-    whisper = None
+    WhisperModel = None
+
+# Note: VAD is disabled - requires onnxruntime which doesn't support Python 3.14 yet
 
 load_dotenv()
 
 
+class PersistentFFmpegPipe:
+    """Simplified FFmpeg conversion - optimized for speed"""
+    
+    def __init__(self):
+        # No persistent process needed - use simple per-chunk conversion
+        # but optimized for minimal overhead
+        pass
+    
+    async def convert_chunk(self, webm_data: bytes) -> Optional[bytes]:
+        """Convert WebM data to PCM - optimized fast conversion"""
+        if not webm_data or len(webm_data) == 0:
+            return None
+        
+        # Simplified FFmpeg command for speed
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-f', 'webm',
+            '-i', 'pipe:0',
+            '-f', 's16le',
+            '-ar', '16000',
+            '-ac', '1',
+            '-loglevel', 'error',
+            '-nostdin',
+            'pipe:1'
+        ]
+        
+        def run_ffmpeg():
+            try:
+                process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout, stderr = process.communicate(input=webm_data, timeout=5)
+                
+                if process.returncode == 0 and len(stdout) > 0:
+                    return stdout
+                return None
+            except subprocess.TimeoutExpired:
+                return None
+            except Exception:
+                return None
+        
+        loop = asyncio.get_event_loop()
+        pcm_data = await loop.run_in_executor(None, run_ffmpeg)
+        
+        return pcm_data if pcm_data and len(pcm_data) > 0 else None
+    
+    async def start(self):
+        """No-op for compatibility"""
+        pass
+    
+    async def stop(self):
+        """No-op for compatibility"""
+        pass
+
+
 class TranscriptionService:
-    """Service for real-time audio transcription using Whisper"""
+    """Service for real-time audio transcription using faster-whisper
+    Note: VAD is disabled as onnxruntime is not available for Python 3.14
+    """
     
-    # Configurable thresholds (can be overridden via environment variables)
-    SILENCE_THRESHOLD_MAX = float(os.getenv("SILENCE_THRESHOLD_MAX", "0.05"))
-    SILENCE_THRESHOLD_RMS = float(os.getenv("SILENCE_THRESHOLD_RMS", "0.02"))
-    MIN_AUDIO_DURATION = float(os.getenv("MIN_AUDIO_DURATION", "1.0"))
+    # Sliding buffer configuration: 1-2 seconds at 16kHz
+    # 1 second = 16000 samples = 32000 bytes (16-bit)
+    # 2 seconds = 32000 samples = 64000 bytes (16-bit)
+    SLIDING_BUFFER_SIZE = 32000  # 1 second at 16kHz = 32000 bytes
+    SLIDING_BUFFER_OVERLAP = 16000  # 0.5 second overlap = 16000 bytes
     MAX_BUFFER_SIZE = int(os.getenv("MAX_TRANSCRIPTION_BUFFER_SIZE", "10485760"))  # 10MB default
-    FFMPEG_TIMEOUT = int(os.getenv("FFMPEG_TIMEOUT", "10"))  # 10 seconds default
-    
-    # Hallucination patterns (can be extended)
-    # Disabled - too aggressive, rejecting valid speech
-    HALLUCINATION_PATTERNS = []
     
     def __init__(self):
         self.local_model = None
+        self.vad_model = None
+        self.ffmpeg_pipe = PersistentFFmpegPipe()
         self._transcription_warning_logged = False
-        self._lock = asyncio.Lock()  # Thread-safe lock for shared state
+        self._lock = asyncio.Lock()
         
-        logger.info("Initializing Whisper transcription service")
+        logger.info("Initializing faster-whisper transcription service (VAD disabled - onnxruntime not available for Python 3.14)")
         
-        # Load Whisper model
-        if whisper:
-            model_name = os.getenv("LOCAL_WHISPER_MODEL", "base")
+        # Load faster-whisper model (use small.en or distil-small.en for speed)
+        if WhisperModel:
+            model_name = os.getenv("LOCAL_WHISPER_MODEL", "distil-small.en")
+            device = os.getenv("WHISPER_DEVICE", "cpu")  # cpu, cuda, auto
+            compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")  # int8, int8_float16, int16, float16, float32
+            
             try:
-                logger.info(f"Loading Whisper model | Model: {model_name}")
-                self.local_model = whisper.load_model(model_name)
-                logger.info(f"Whisper model loaded successfully | Model: {model_name}")
+                logger.info(f"Loading faster-whisper model | Model: {model_name} | Device: {device} | Compute: {compute_type}")
+                self.local_model = WhisperModel(
+                    model_name,
+                    device=device,
+                    compute_type=compute_type
+                )
+                logger.info(f"faster-whisper model loaded successfully | Model: {model_name}")
             except Exception as e:
                 logger.error(
-                    f"Failed to load Whisper model | Model: {model_name} | "
+                    f"Failed to load faster-whisper model | Model: {model_name} | "
                     f"Error: {type(e).__name__}: {str(e)}",
                     exc_info=True
                 )
                 self.local_model = None
         else:
             logger.error(
-                "Whisper not available | Package not installed | "
-                "Install with: pip install openai-whisper"
+                "faster-whisper not available | Package not installed | "
+                "Install with: pip install faster-whisper"
             )
             self.local_model = None
         
         if not self.local_model:
-            logger.error("No transcription service available | Whisper model failed to load")
+            logger.error("No transcription service available | faster-whisper model failed to load")
     
     async def convert_webm_to_pcm(self, webm_data: bytes) -> Optional[bytes]:
-        """Convert WebM audio chunk to PCM format
+        """Convert WebM audio chunk to PCM format using persistent pipe
         
         Args:
             webm_data: WebM audio bytes from browser
@@ -82,95 +151,31 @@ class TranscriptionService:
         
         # Check if data starts with WebM header, if not try to find it
         if not webm_data.startswith(WEBM_HEADER):
-            # Try to find WebM header in the data
             header_pos = webm_data.find(WEBM_HEADER)
             if header_pos > 0:
                 logger.debug(f"WebM header found at position {header_pos}, trimming prefix")
                 webm_data = webm_data[header_pos:]
             elif header_pos == -1:
-                # No WebM header found - this might be a cluster fragment
-                # Try to prepend a minimal WebM header structure
-                # However, this is complex - better to skip and wait for header chunk
                 logger.warning(
                     f"WebM data does not contain EBML header | "
                     f"First 16 bytes: {webm_data[:16].hex()} | "
                     f"Size: {len(webm_data)} bytes"
                 )
                 return None
-            
+        
         try:
-            # Use FFmpeg with settings optimized for fragmented WebM from MediaRecorder
-            # MediaRecorder sends fragmented WebM: first chunk has initialization, subsequent are clusters
-            # Use 'webm' format specifically for better fragmented WebM support
-            ffmpeg_cmd = [
-                'ffmpeg',
-                '-f', 'webm',  # Use webm format specifically for fragmented WebM
-                '-err_detect', 'ignore_err',
-                '-fflags', '+genpts+discardcorrupt+igndts+ignidx+flush_packets',
-                '-avoid_negative_ts', 'make_zero',
-                '-analyzeduration', '5000000',  # Increased to better handle accumulated fragments
-                '-probesize', '5000000',  # Increased to better handle accumulated fragments
-                '-i', 'pipe:0',
-                '-f', 's16le',
-                '-acodec', 'pcm_s16le',
-                '-ar', '16000',
-                '-ac', '1',
-                '-af', 'aresample=resampler=soxr:precision=28:cheby=1',
-                '-loglevel', 'error',
-                '-nostdin',
-                'pipe:1'
-            ]
-            
-            def run_ffmpeg():
-                try:
-                    with subprocess.Popen(
-                        ffmpeg_cmd,
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    ) as process:
-                        stdout, stderr = process.communicate(input=webm_data, timeout=self.FFMPEG_TIMEOUT)
-                        
-                        if len(stdout) > 0:
-                            return stdout
-                        
-                        if process.returncode != 0:
-                            error_msg = stderr.decode('utf-8', errors='ignore') if stderr else f"FFmpeg returned {process.returncode}"
-                            logger.warning(
-                                f"FFmpeg conversion failed | Return code: {process.returncode} | "
-                                f"Error: {error_msg[:200]} | Input size: {len(webm_data)} bytes"
-                            )
-                            return None
-                        
-                        return stdout
-                except subprocess.TimeoutExpired:
-                    logger.warning(
-                        f"FFmpeg conversion timed out | Input size: {len(webm_data)} bytes | "
-                        f"Timeout: {self.FFMPEG_TIMEOUT}s"
-                    )
-                    return None
-                except Exception as e:
-                    logger.warning(
-                        f"FFmpeg process error | Input size: {len(webm_data)} bytes | "
-                        f"Error: {type(e).__name__}: {str(e)}"
-                    )
-                    return None
-            
-            loop = asyncio.get_event_loop()
-            pcm_data = await loop.run_in_executor(None, run_ffmpeg)
+            # Use persistent FFmpeg pipe
+            pcm_data = await self.ffmpeg_pipe.convert_chunk(webm_data)
             
             if not pcm_data or len(pcm_data) == 0:
-                logger.warning(
-                    f"FFmpeg conversion produced no output | Input size: {len(webm_data)} bytes"
-                )
+                logger.debug(f"FFmpeg conversion produced no output | Input size: {len(webm_data)} bytes")
                 return None
             
-            logger.info(
+            logger.debug(
                 f"WebM to PCM conversion successful | Input: {len(webm_data)} bytes | "
                 f"Output: {len(pcm_data)} bytes | Ratio: {len(pcm_data)/len(webm_data):.2f}x"
             )
             return pcm_data
-                    
         except FileNotFoundError:
             logger.error(
                 "FFmpeg not found | Please install ffmpeg | "
@@ -183,6 +188,7 @@ class TranscriptionService:
                 f"Error: {type(e).__name__}: {str(e)}"
             )
             return None
+    
     
     async def transcribe_audio_chunk(self, audio_data: bytes, language: Optional[str] = None, audio_format: Optional[str] = None) -> str:
         """Transcribe a single audio chunk
@@ -199,157 +205,30 @@ class TranscriptionService:
         # Force English language only
         language = language or "en"
         
-        # Use Whisper if available
+        # Use faster-whisper if available
         if self.local_model:
             logger.debug(
                 f"Starting transcription | Audio size: {len(audio_data)} bytes | "
                 f"Format: {audio_format or 'unknown'} | Language: {language}"
             )
-            return await self._transcribe_whisper(audio_data, language, audio_format)
+            return await self._transcribe_faster_whisper(audio_data, language, audio_format)
         
         # No service available
         async with self._lock:
             if not self._transcription_warning_logged:
                 logger.warning(
                     "No transcription service available | Audio is being captured but not transcribed | "
-                    "Whisper model not loaded"
+                    "faster-whisper model not loaded"
                 )
                 self._transcription_warning_logged = True
         return ""
     
-    def _is_hallucination(self, transcript: str) -> bool:
-        """Check if transcript matches known hallucination patterns or repetitive patterns"""
-        if not transcript or len(transcript.strip()) == 0:
-            return False
-        
-        transcript_lower = transcript.lower()
-        transcript_clean = transcript.strip()
-        
-        # Check against known English hallucination patterns (substring match)
-        for pattern in self.HALLUCINATION_PATTERNS:
-            if pattern.lower() in transcript_lower:
-                logger.info(
-                    f"Rejecting transcript - hallucination pattern match | Pattern: {pattern} | "
-                    f"Transcript preview: {transcript[:100]}"
-                )
-                return True
-        
-        # Detect phrase/sentence-level repetition
-        # Disabled - too aggressive, rejecting valid speech patterns
-        # Split by sentence delimiters
-        # sentences = re.split(r'[.!?。！？]\s*', transcript_clean)
-        # sentences = [s.strip() for s in sentences if s.strip()]
-        # 
-        # if len(sentences) > 1:
-        #     # Normalize sentences for comparison (lowercase, remove extra whitespace)
-        #     normalized_sentences = [re.sub(r'\s+', ' ', s.lower().strip()) for s in sentences]
-        #     
-        #     # Count sentence occurrences
-        #     sentence_counts = {}
-        #     for sent in normalized_sentences:
-        #         if len(sent) > 5:  # Only consider sentences longer than 5 chars
-        #             sentence_counts[sent] = sentence_counts.get(sent, 0) + 1
-        #     
-        #     # If the same sentence appears 2+ times, it's likely a hallucination
-        #     for sent, count in sentence_counts.items():
-        #         if count >= 2:
-        #             logger.info(f"[TranscriptionService] Rejecting transcript - repeated sentence ({count} times): '{sent[:80]}...'")
-        #             return True
-        
-        # Detect phrase-level repetition (3+ word phrases)
-        # Split into words
-        words = re.findall(r'\S+', transcript_clean)
-        
-        if len(words) == 0:
-            return False
-        
-        # Check for repeated phrases (3-6 words long)
-        # Disabled - too aggressive, rejecting valid speech patterns
-        # phrase_lengths = [3, 4, 5, 6]
-        # for phrase_len in phrase_lengths:
-        #     if len(words) < phrase_len * 2:  # Need at least 2 occurrences
-        #         continue
-        #     
-        #     phrases = {}
-        #     for i in range(len(words) - phrase_len + 1):
-        #         phrase = ' '.join(words[i:i+phrase_len]).lower()
-        #         # Normalize phrase (remove punctuation differences)
-        #         phrase_normalized = re.sub(r'[^\w\s]', '', phrase)
-        #         if len(phrase_normalized.strip()) > 0:
-        #             phrases[phrase_normalized] = phrases.get(phrase_normalized, 0) + 1
-        #     
-        #     # If a phrase appears 2+ times, it's suspicious
-        #     for phrase, count in phrases.items():
-        #         if count >= 2 and len(phrase.split()) >= 3:  # At least 3 words, repeated 2+ times
-        #             logger.info(f"[TranscriptionService] Rejecting transcript - repeated phrase ({count} times): '{phrase[:80]}...'")
-        #             return True
-        
-        # Check if the same word/phrase is repeated many times
-        # Count occurrences of each unique word
-        word_counts = {}
-        for word in words:
-            # Normalize word (remove common punctuation, but keep Unicode letters/characters)
-            normalized = re.sub(r'[،,.\-_\s]+', '', word).lower()
-            if normalized and len(normalized) > 0:
-                word_counts[normalized] = word_counts.get(normalized, 0) + 1
-        
-        # If we have very few unique words but many total words, it's likely repetitive
-        unique_words = len([w for w in word_counts.values() if w > 0])
-        total_words = len(words)
-        
-        # Threshold: if more than 90% of words are the same, it's likely a hallucination (relaxed from 70%)
-        # Only check for very extreme cases
-        if unique_words > 0 and total_words > 10:  # Increased minimum word count
-            repetition_ratio = max(word_counts.values()) / total_words
-            if repetition_ratio > 0.9:  # Increased threshold from 0.7 to 0.9
-                logger.info(
-                    f"Rejecting transcript - high repetition ratio | Ratio: {repetition_ratio:.2f} | "
-                    f"Unique words: {unique_words}/{total_words} | Transcript preview: {transcript[:100]}"
-                )
-                return True
-        
-        # Check for excessive repetition of short words/phrases (2-4 characters)
-        # This catches patterns like "أهي" repeated many times
-        # Made more lenient - only reject if same word appears 20+ times (increased from 10)
-        for word, count in word_counts.items():
-            if len(word) <= 4 and count >= 20:  # Short word repeated 20+ times (increased from 10)
-                logger.info(
-                    f"Rejecting transcript - excessive short word repetition | Word: '{word}' | "
-                    f"Count: {count} | Transcript preview: {transcript[:100]}"
-                )
-                return True
-        
-        # Check for exact repetition of the same sequence (e.g., "word, word, word" pattern)
-        # Look for patterns where the same word appears consecutively many times
-        consecutive_repeats = 1
-        max_consecutive = 1
-        prev_word = None
-        
-        for word in words:
-            normalized = re.sub(r'[،,.\-_\s]+', '', word).lower()
-            if normalized and normalized == prev_word:
-                consecutive_repeats += 1
-                max_consecutive = max(max_consecutive, consecutive_repeats)
-            else:
-                consecutive_repeats = 1
-            prev_word = normalized
-        
-        # If the same word appears 15+ times consecutively, it's likely noise (increased from 8)
-        # This allows for natural repetition like "hello, hello, hello" in greetings
-        if max_consecutive >= 15:  # Increased from 8 to allow more natural repetition
-            logger.info(
-                f"Rejecting transcript - excessive consecutive repetition | "
-                f"Max consecutive: {max_consecutive} | Transcript preview: {transcript[:100]}"
-            )
-            return True
-        
-        return False
     
-    async def _transcribe_whisper(self, audio_data: bytes, language: Optional[str] = None, audio_format: Optional[str] = None) -> str:
-        """Transcribe using local Whisper model
+    async def _transcribe_faster_whisper(self, audio_data: bytes, language: Optional[str] = None, audio_format: Optional[str] = None) -> str:
+        """Transcribe using faster-whisper model
         
         Args:
-            audio_data: Audio bytes (can be WebM/Opus from browser or raw PCM from system)
+            audio_data: Audio bytes (can be WebM/Opus from browser or PCM from system)
             language: Language code (optional)
             audio_format: Audio format hint (optional, e.g., 'webm' or 'pcm')
         """
@@ -395,55 +274,11 @@ class TranscriptionService:
                 )
                 return ""
             
-            # Check if audio is long enough
+            # Calculate audio duration
             audio_duration = len(audio_np) / 16000.0  # 16kHz sample rate
             logger.debug(
-                f"Audio duration check | Duration: {audio_duration:.2f}s | "
-                f"Samples: {len(audio_np)} | Min required: {self.MIN_AUDIO_DURATION}s"
+                f"Audio duration | Duration: {audio_duration:.2f}s | Samples: {len(audio_np)}"
             )
-            
-            if audio_duration < self.MIN_AUDIO_DURATION:
-                logger.debug(
-                    f"Audio chunk too short, skipping | Duration: {audio_duration:.2f}s | "
-                    f"Min required: {self.MIN_AUDIO_DURATION}s"
-                )
-                return ""
-            
-            # Check if audio has any meaningful signal (not just silence or noise)
-            audio_max = np.abs(audio_np).max()
-            audio_rms = np.sqrt(np.mean(audio_np**2))
-            audio_std = np.std(audio_np)
-            
-            logger.debug(
-                f"Audio analysis | Max: {audio_max:.4f} | RMS: {audio_rms:.4f} | "
-                f"Std: {audio_std:.4f} | Duration: {audio_duration:.2f}s"
-            )
-            
-            # Silence detection using configurable thresholds
-            if audio_max < self.SILENCE_THRESHOLD_MAX or audio_rms < self.SILENCE_THRESHOLD_RMS:
-                logger.debug(
-                    f"Audio appears to be silence/noise, skipping | Max: {audio_max:.4f} | "
-                    f"RMS: {audio_rms:.4f} | Thresholds: max={self.SILENCE_THRESHOLD_MAX}, "
-                    f"rms={self.SILENCE_THRESHOLD_RMS}"
-                )
-                return ""
-            
-            # Check if audio is mostly noise
-            if audio_std < 0.02 and audio_max < 0.1:
-                logger.debug(
-                    f"Audio appears to be low-level noise, skipping | Std: {audio_std:.4f} | "
-                    f"Max: {audio_max:.4f}"
-                )
-                return ""
-            
-            # Normalize audio to improve transcription quality
-            if audio_max > self.SILENCE_THRESHOLD_MAX and audio_max < 0.3:
-                normalization_factor = min(0.7 / audio_max, 3.0)
-                audio_np = audio_np * normalization_factor
-                logger.debug(
-                    f"Audio normalized | Factor: {normalization_factor:.2f} | "
-                    f"Original max: {audio_max:.4f} | New max: {np.abs(audio_np).max():.4f}"
-                )
             
             # Run transcription in executor
             loop = asyncio.get_event_loop()
@@ -451,34 +286,57 @@ class TranscriptionService:
             def transcribe_audio():
                 try:
                     logger.info(
-                        f"Starting Whisper transcription | Language: {language or 'auto'} | "
+                        f"Starting faster-whisper transcription | Language: {language or 'auto'} | "
                         f"Duration: {audio_duration:.2f}s | Samples: {len(audio_np)}"
                     )
                     
-                    transcribe_kwargs = {
-                        "temperature": 0.0,
-                        "beam_size": 5,
-                        "best_of": 5,
-                        "condition_on_previous_text": False,
-                        "compression_ratio_threshold": 2.4,
-                        "logprob_threshold": -1.0,
-                        "no_speech_threshold": 0.5,
-                        "word_timestamps": False,
-                        "language": "en",  # Always force English language
-                    }
-                    
-                    result = self.local_model.transcribe(audio_np, **transcribe_kwargs)
-                    logger.debug(
-                        f"Whisper transcription completed | Result type: {type(result).__name__}"
+                    # faster-whisper transcribe options - optimized for low latency
+                    segments, info = self.local_model.transcribe(
+                        audio_np,
+                        language="en",  # Force English
+                        beam_size=1,  # Low latency
+                        temperature=0.0,
+                        condition_on_previous_text=False,
+                        word_timestamps=False,
+                        vad_filter=False,  # Disabled: requires onnxruntime (not available for Python 3.14)
                     )
                     
-                    if isinstance(result, dict):
-                        if "segments" in result:
-                            logger.debug(f"Transcription segments: {len(result['segments'])}")
-                        if "language" in result:
-                            logger.debug(f"Detected language: {result['language']}")
+                    logger.info(
+                        f"faster-whisper transcription completed | Detected language: {info.language} | "
+                        f"Probability: {info.language_probability:.2f}"
+                    )
                     
-                    return result
+                    # Collect transcript text from segments
+                    transcript_parts = []
+                    segment_count = 0
+                    for segment in segments:
+                        segment_count += 1
+                        if segment.text and segment.text.strip():
+                            transcript_parts.append(segment.text.strip())
+                            logger.info(
+                                f"Segment {segment_count} | Text: {segment.text.strip()[:50]} | "
+                                f"Start: {segment.start:.2f}s | End: {segment.end:.2f}s"
+                            )
+                        else:
+                            logger.info(
+                                f"Segment {segment_count} | Empty/whitespace | "
+                                f"Start: {segment.start:.2f}s | End: {segment.end:.2f}s | "
+                                f"Raw text: {repr(segment.text[:30]) if segment.text else 'None'}"
+                            )
+                    
+                    if segment_count == 0:
+                        logger.debug(
+                            f"No segments returned from faster-whisper | "
+                            f"Duration: {audio_duration:.2f}s"
+                        )
+                    elif len(transcript_parts) == 0:
+                        logger.warning(
+                            f"Found {segment_count} segments but all were empty/whitespace | "
+                            f"Duration: {audio_duration:.2f}s"
+                        )
+                    
+                    transcript = " ".join(transcript_parts)
+                    return transcript
                 except Exception as e:
                     logger.error(
                         f"Error in transcribe_audio function | Error: {type(e).__name__}: {str(e)}",
@@ -486,73 +344,25 @@ class TranscriptionService:
                     )
                     raise
             
-            logger.debug("Running Whisper transcription in executor")
-            result = await loop.run_in_executor(None, transcribe_audio)
-            logger.debug(f"Transcription executor completed | Result available: {result is not None}")
+            logger.debug("Running faster-whisper transcription in executor")
+            transcript = await loop.run_in_executor(None, transcribe_audio)
+            logger.debug(f"Transcription executor completed | Result available: {transcript is not None}")
             
-            if not result:
+            if not transcript or not transcript.strip():
                 logger.warning("Transcription returned empty result")
                 return ""
             
-            transcript = result.get("text", "").strip() if isinstance(result, dict) else ""
+            transcript = transcript.strip()
             
-            # Check if Whisper detected that there's no speech
-            if isinstance(result, dict):
-                no_speech_prob = result.get("no_speech_prob", 0.0)
-                language_prob = result.get("language_prob", 0.0) if "language_prob" in result else None
-                avg_logprob = result.get("avg_logprob", -float('inf')) if "avg_logprob" in result else None
-                
-                if no_speech_prob > 0.5:
-                    logger.debug(
-                        f"Rejecting transcript - no speech detected | no_speech_prob: {no_speech_prob:.2f} | "
-                        f"Transcript preview: {transcript[:50]}"
-                    )
-                    return ""
-                
-                if avg_logprob is not None and avg_logprob < -1.5:
-                    logger.debug(
-                        f"Rejecting transcript - low confidence | avg_logprob: {avg_logprob:.2f} | "
-                        f"Transcript preview: {transcript[:50]}"
-                    )
-                    return ""
-                
-                # Validate transcript for hallucination patterns
-                if transcript and self._is_hallucination(transcript):
-                    logger.info(
-                        f"Rejecting transcript - hallucination detected | Transcript preview: {transcript[:50]} | "
-                        f"Audio stats: max={audio_max:.4f}, RMS={audio_rms:.4f}, std={audio_std:.4f}, "
-                        f"no_speech_prob={no_speech_prob:.2f}"
-                    )
-                    return ""
-                
-                # Log confidence metrics
-                if transcript:
-                    lang_prob_str = f"{language_prob:.2f}" if language_prob is not None else "N/A"
-                    logger.info(
-                        f"Transcription successful | no_speech_prob: {no_speech_prob:.2f} | "
-                        f"language_prob: {lang_prob_str} | Text length: {len(transcript)} chars | "
-                        f"Preview: {transcript[:100]}"
-                    )
-                else:
-                    logger.warning(
-                        f"Transcription returned empty text | Result keys: {list(result.keys())} | "
-                        f"Segments: {len(result.get('segments', []))}"
-                    )
-            else:
-                if transcript:
-                    logger.info(
-                        f"Transcription successful | Text length: {len(transcript)} chars | "
-                        f"Preview: {transcript[:100]}"
-                    )
-                else:
-                    logger.warning(
-                        f"Transcription returned empty text | Result type: {type(result).__name__}"
-                    )
+            logger.info(
+                f"Transcription successful | Text length: {len(transcript)} chars | "
+                f"Preview: {transcript[:100]}"
+            )
             
             return transcript
         except Exception as e:
             logger.error(
-                f"Whisper transcription error | Error: {type(e).__name__}: {str(e)}",
+                f"faster-whisper transcription error | Error: {type(e).__name__}: {str(e)}",
                 exc_info=True
             )
             return ""
@@ -562,10 +372,8 @@ class TranscriptionService:
         audio_stream: AsyncGenerator[bytes, None],
         callback: Optional[Callable[[str, float], None]] = None
     ) -> AsyncGenerator[str, None]:
-        """Transcribe audio stream in real-time with buffer size limits"""
+        """Transcribe audio stream in real-time using sliding buffer (1-2 seconds with overlap)"""
         buffer = b""
-        chunk_duration = 1.0  # Process 1 second chunks
-        threshold = 16000 * 2  # 16kHz, 16-bit samples = 32000 bytes
         
         async for chunk in audio_stream:
             buffer += chunk
@@ -578,10 +386,14 @@ class TranscriptionService:
                 )
                 buffer = buffer[-self.MAX_BUFFER_SIZE:]
             
-            # Process when buffer reaches threshold
-            while len(buffer) >= threshold:
-                chunk_to_process = buffer[:threshold]
-                buffer = buffer[threshold:]
+            # Process when buffer reaches 1 second (with sliding window)
+            while len(buffer) >= self.SLIDING_BUFFER_SIZE:
+                # Take 1-2 seconds for processing
+                chunk_size = min(len(buffer), self.SLIDING_BUFFER_SIZE * 2)  # Up to 2 seconds
+                chunk_to_process = buffer[:chunk_size]
+                
+                # Slide buffer forward with overlap (keep last 0.5 seconds)
+                buffer = buffer[chunk_size - self.SLIDING_BUFFER_OVERLAP:]
                 
                 transcript = await self.transcribe_audio_chunk(chunk_to_process, language='en')
                 if transcript:
@@ -590,12 +402,16 @@ class TranscriptionService:
                     yield transcript
         
         # Process remaining buffer
-        if buffer:
+        if buffer and len(buffer) >= self.SLIDING_BUFFER_SIZE // 2:  # Process if at least 0.5 seconds
             transcript = await self.transcribe_audio_chunk(buffer, language='en')
             if transcript:
                 if callback:
                     callback(transcript, asyncio.get_event_loop().time())
                 yield transcript
+    
+    async def cleanup(self):
+        """Cleanup resources"""
+        await self.ffmpeg_pipe.stop()
 
 
 class AudioCaptureService:
@@ -609,12 +425,13 @@ class AudioCaptureService:
         self.audio_queue = asyncio.Queue()
         self._pyaudio = None
         self._stream = None
+        self._ffmpeg_process = None  # Store FFmpeg process for cleanup
         # Allow fallback to default input device if system audio device not found
         self.allow_fallback = os.getenv("AUDIO_ALLOW_FALLBACK", "true").lower() == "true"
         # Manual device selection via environment variable (device index or name)
         self.manual_device = os.getenv("AUDIO_DEVICE", None)
         # Preferred capture method: 'pyaudio' or 'ffmpeg'
-        self.capture_method = os.getenv("AUDIO_CAPTURE_METHOD", "pyaudio").lower()
+        self.capture_method = os.getenv("AUDIO_CAPTURE_METHOD", "ffmpeg").lower()  # Default to ffmpeg for better macOS support
     
     def _find_system_audio_device(self, p):
         """Find a system audio capture device (e.g., BlackHole)
@@ -725,7 +542,7 @@ class AudioCaptureService:
                 "1. BlackHole (free): brew install blackhole-2ch\n"
                 "2. Soundflower (free, older): https://github.com/mattingalls/Soundflower\n"
                 "3. Loopback (paid): https://rogueamoeba.com/loopback/\n"
-                "4. Audio Hijack (paid): https://rogueamoeba.com/audiohijack/\n"
+                "4. Audio Hijack (paid): https://rogueamoeba.com/loopback/\n"
                 "\n"
                 "After installing, create a Multi-Output Device in Audio MIDI Setup that includes\n"
                 "the virtual audio device, then set it as your system output.\n"
@@ -738,14 +555,218 @@ class AudioCaptureService:
         
         return device_index
     
+    async def _start_capture_ffmpeg(self) -> AsyncGenerator[bytes, None]:
+        """Start capturing system audio using FFmpeg (works on macOS without BlackHole)"""
+        import platform
+        
+        # Detect OS and use appropriate FFmpeg input
+        system = platform.system().lower()
+        ffmpeg_input = None
+        input_format = None
+        ffmpeg_process = None
+        
+        try:
+            if system == "darwin":  # macOS
+                # Try to find BlackHole or other virtual audio device first
+                # List available avfoundation devices
+                try:
+                    list_cmd = ['ffmpeg', '-f', 'avfoundation', '-list_devices', 'true', '-i', '']
+                    list_process = subprocess.run(
+                        list_cmd,
+                        stderr=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        timeout=5
+                    )
+                    stderr_output = list_process.stderr.decode('utf-8', errors='ignore')
+                    
+                    # Look for BlackHole or other virtual audio devices in the output
+                    blackhole_found = False
+                    device_name = None
+                    for line in stderr_output.split('\n'):
+                        line_lower = line.lower()
+                        if any(keyword in line_lower for keyword in ['blackhole', 'loopback', 'soundflower', 'virtual']):
+                            # Extract device index (usually appears as [index] device_name)
+                            match = re.search(r'\[(\d+)\]\s+(.+)', line)
+                            if match:
+                                device_index = match.group(1)
+                                device_name = match.group(2).strip()
+                                if 'blackhole' in line_lower or 'loopback' in line_lower:
+                                    ffmpeg_input = f":{device_index}"
+                                    blackhole_found = True
+                                    logger.info(f"Found virtual audio device: {device_name} (index {device_index})")
+                                    break
+                except Exception as e:
+                    logger.debug(f"Could not list avfoundation devices: {e}")
+                
+                # If no virtual device found, try to use system audio capture
+                if not blackhole_found:
+                    # On macOS, capturing system audio directly is tricky
+                    # :0 with avfoundation typically captures microphone, not system audio
+                    # For true system audio, we need BlackHole or screen recording permissions
+                    # Try :0 but warn that it might not work for system audio
+                    ffmpeg_input = ":0"
+                    logger.warning(
+                        "No virtual audio device (BlackHole) found. Attempting to use default audio device.\n"
+                        "Note: This may capture microphone audio, not system audio.\n"
+                        "For true system audio capture, please install BlackHole: brew install blackhole-2ch\n"
+                        "Then create a Multi-Output Device in Audio MIDI Setup."
+                    )
+                
+                input_format = "avfoundation"
+                logger.info(f"Using FFmpeg with avfoundation to capture macOS system audio | Input: {ffmpeg_input}")
+            elif system == "linux":
+                # Use pulseaudio loopback (if available)
+                ffmpeg_input = "pulse"
+                input_format = "pulse"
+                logger.info("Using FFmpeg with pulseaudio to capture Linux system audio")
+            elif system == "windows":
+                # Use wasapi loopback
+                ffmpeg_input = "default"
+                input_format = "wasapi"
+                logger.info("Using FFmpeg with WASAPI to capture Windows system audio")
+            else:
+                raise RuntimeError(f"FFmpeg system audio capture not supported on {system}")
+            
+            # Build FFmpeg command
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-f', input_format,
+                '-i', ffmpeg_input,
+                '-f', 's16le',  # 16-bit signed little-endian PCM
+                '-ar', str(self.sample_rate),  # Sample rate
+                '-ac', str(self.channels),  # Channels
+                '-loglevel', 'error',  # Suppress verbose output
+                '-nostdin',  # Non-interactive
+                'pipe:1'  # Output to stdout
+            ]
+            
+            logger.info(f"Starting FFmpeg system audio capture | Command: {' '.join(ffmpeg_cmd)}")
+            
+            # Start FFmpeg process
+            ffmpeg_process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=self.chunk_size
+            )
+            self._ffmpeg_process = ffmpeg_process  # Store for cleanup
+            
+            self.is_recording = True
+            total_bytes_captured = 0
+            chunk_count = 0
+            
+            logger.info(
+                f"Started FFmpeg system audio capture | Sample rate: {self.sample_rate}Hz | "
+                f"Channels: {self.channels} | Chunk size: {self.chunk_size} bytes"
+            )
+            
+            try:
+                loop = asyncio.get_event_loop()
+                
+                while self.is_recording:
+                    # Read audio data from FFmpeg stdout (non-blocking)
+                    def read_chunk():
+                        return ffmpeg_process.stdout.read(self.chunk_size)
+                    
+                    data = await loop.run_in_executor(None, read_chunk)
+                    
+                    if not data:
+                        # Check if process has terminated
+                        if ffmpeg_process.poll() is not None:
+                            stderr_output = b""
+                            try:
+                                stderr_output = ffmpeg_process.stderr.read()
+                            except:
+                                pass
+                            if stderr_output:
+                                error_text = stderr_output.decode('utf-8', errors='ignore')
+                                logger.error(f"FFmpeg process terminated | stderr: {error_text}")
+                            else:
+                                logger.warning("FFmpeg process terminated unexpectedly")
+                            break
+                        # No data available, wait a bit
+                        await asyncio.sleep(0.01)
+                        continue
+                    
+                    chunk_count += 1
+                    total_bytes_captured += len(data)
+                    
+                    # Log first chunk and then every 100 chunks at INFO level, others at DEBUG
+                    if chunk_count == 1:
+                        logger.info(
+                            f"FFmpeg system audio capture started | Chunk #{chunk_count} | "
+                            f"Size: {len(data)} bytes | Total: {total_bytes_captured} bytes"
+                        )
+                    elif chunk_count % 100 == 0:
+                        logger.info(
+                            f"FFmpeg system audio capture progress | Chunk #{chunk_count} | "
+                            f"Size: {len(data)} bytes | Total: {total_bytes_captured} bytes"
+                        )
+                    else:
+                        logger.debug(
+                            f"FFmpeg system audio chunk | Chunk #{chunk_count} | "
+                            f"Size: {len(data)} bytes | Total: {total_bytes_captured} bytes"
+                        )
+                    
+                    yield data
+            finally:
+                logger.info(
+                    f"Stopped FFmpeg system audio capture | Total chunks: {chunk_count} | "
+                    f"Total bytes: {total_bytes_captured}"
+                )
+                if ffmpeg_process:
+                    try:
+                        ffmpeg_process.terminate()
+                        # Wait for process to terminate (with timeout)
+                        try:
+                            ffmpeg_process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            logger.warning("FFmpeg process did not terminate, forcing kill")
+                            ffmpeg_process.kill()
+                            ffmpeg_process.wait()
+                    except Exception as e:
+                        logger.warning(
+                            f"Error terminating FFmpeg process | Error: {type(e).__name__}: {str(e)}"
+                        )
+        except FileNotFoundError:
+            error_msg = (
+                "FFmpeg not found | System audio capture requires FFmpeg | "
+                "Install with: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        except Exception as e:
+            logger.error(
+                f"FFmpeg audio capture error | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            if ffmpeg_process:
+                try:
+                    ffmpeg_process.terminate()
+                    ffmpeg_process.wait(timeout=1)
+                except:
+                    try:
+                        ffmpeg_process.kill()
+                    except:
+                        pass
+            raise
+    
     async def start_capture(self) -> AsyncGenerator[bytes, None]:
         """Start capturing system audio with proper resource cleanup"""
+        # Use FFmpeg if specified, otherwise use PyAudio
+        if self.capture_method == "ffmpeg":
+            async for chunk in self._start_capture_ffmpeg():
+                yield chunk
+            return
+        
+        # PyAudio-based capture (original implementation)
         try:
             import pyaudio
         except ImportError:
             error_msg = (
                 "PyAudio not available | Audio capture requires PyAudio installation | "
-                "Install with: pip install pyaudio"
+                "Install with: pip install pyaudio | "
+                "Alternatively, set AUDIO_CAPTURE_METHOD=ffmpeg to use FFmpeg instead"
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
@@ -771,12 +792,15 @@ class AudioCaptureService:
                         logger.warning(
                             f"No system audio device (BlackHole) found. Falling back to default input device: {device_name}\n"
                             f"Note: This will capture from your microphone, not system audio.\n"
-                            f"To capture true system audio, install BlackHole: brew install blackhole-2ch"
+                            f"To capture true system audio, either:\n"
+                            f"1. Install BlackHole: brew install blackhole-2ch\n"
+                            f"2. Set AUDIO_CAPTURE_METHOD=ffmpeg to use FFmpeg (works without BlackHole on macOS)"
                         )
                     except Exception as e:
                         error_msg = (
                             f"Failed to get default input device: {str(e)}\n"
-                            "No system audio device found and default input device is unavailable."
+                            "No system audio device found and default input device is unavailable.\n"
+                            "Try setting AUDIO_CAPTURE_METHOD=ffmpeg to use FFmpeg instead."
                         )
                         logger.error(error_msg)
                         raise RuntimeError(error_msg) from e
@@ -787,7 +811,8 @@ class AudioCaptureService:
                         "2. Create Multi-Output Device in Audio MIDI Setup\n"
                         "3. Include BlackHole in Multi-Output Device\n"
                         "4. Set system output to Multi-Output Device\n\n"
-                        "Alternatively, set AUDIO_ALLOW_FALLBACK=true to use default input device."
+                        "Alternatively, set AUDIO_CAPTURE_METHOD=ffmpeg to use FFmpeg (works without BlackHole on macOS)\n"
+                        "or set AUDIO_ALLOW_FALLBACK=true to use default input device."
                     )
                     logger.error(error_msg)
                     raise RuntimeError(error_msg)
@@ -811,7 +836,8 @@ class AudioCaptureService:
             except Exception as e:
                 error_msg = (
                     f"Failed to open audio device '{device_name}' (index {device_index}): {str(e)}\n"
-                    "Make sure the device is available and not in use by another application."
+                    "Make sure the device is available and not in use by another application.\n"
+                    "Try setting AUDIO_CAPTURE_METHOD=ffmpeg to use FFmpeg instead."
                 )
                 logger.error(error_msg)
                 raise RuntimeError(error_msg) from e
@@ -908,3 +934,14 @@ class AudioCaptureService:
             except Exception:
                 pass
             self._pyaudio = None
+        if self._ffmpeg_process:
+            try:
+                self._ffmpeg_process.terminate()
+                try:
+                    self._ffmpeg_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._ffmpeg_process.kill()
+                    self._ffmpeg_process.wait()
+            except Exception:
+                pass
+            self._ffmpeg_process = None
