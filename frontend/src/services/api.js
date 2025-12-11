@@ -82,6 +82,12 @@ export const aiAPI = {
       include_faqs: includeFAQs,
       include_email_draft: includeEmailDraft
     }),
+  generateTodosFromTranscript: (sessionId) =>
+    api.post(`/api/ai/generate-todos/${sessionId}`),
+  generateJiraIssuesFromTranscript: (sessionId, projectKey, issueType = 'Task') =>
+    api.post(`/api/ai/generate-jira-issues/${sessionId}`, null, {
+      params: { project_key: projectKey, issue_type: issueType }
+    }),
   getMeetingInsights: (sessionId) =>
     api.post(`/api/ai/meeting-insights/${sessionId}`),
   categorizeEmail: (emailContent, subject, sender) =>
@@ -131,6 +137,10 @@ export const aiAPI = {
     }),
   getJiraProjects: () =>
     api.get('/api/ai/jira-projects'),
+  getMyJiraIssues: (status = null, maxResults = 100) =>
+    api.get('/api/ai/jira/my-issues', {
+      params: { status, max_results: maxResults }
+    }),
   createJiraIssue: (projectKey, summary, description, issueType = 'Task', priority = null, labels = null, assignee = null) =>
     api.post('/api/ai/create-jira-issue', null, {
       params: { 

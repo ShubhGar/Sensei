@@ -37,6 +37,16 @@ class PersistentFFmpegPipe:
         if not webm_data or len(webm_data) == 0:
             return None
         
+        # Check if FFmpeg is available
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=2, check=True)
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            logger.error(
+                "FFmpeg not found or not working | WebM to PCM conversion requires FFmpeg | "
+                "Install with: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)"
+            )
+            return None
+        
         # Simplified FFmpeg command for speed
         ffmpeg_cmd = [
             'ffmpeg',
@@ -58,14 +68,19 @@ class PersistentFFmpegPipe:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
-                stdout, stderr = process.communicate(input=webm_data, timeout=5)
+                stdout, stderr = process.communicate(input=webm_data, timeout=10)  # Increased timeout
                 
                 if process.returncode == 0 and len(stdout) > 0:
                     return stdout
+                elif stderr:
+                    error_text = stderr.decode('utf-8', errors='ignore')
+                    logger.warning(f"FFmpeg conversion failed | Return code: {process.returncode} | Error: {error_text[:200]}")
                 return None
             except subprocess.TimeoutExpired:
+                logger.warning("FFmpeg conversion timed out")
                 return None
-            except Exception:
+            except Exception as e:
+                logger.warning(f"FFmpeg conversion error: {type(e).__name__}: {str(e)}")
                 return None
         
         loop = asyncio.get_event_loop()
@@ -103,25 +118,84 @@ class TranscriptionService:
         
         logger.info("Initializing faster-whisper transcription service (VAD disabled - onnxruntime not available for Python 3.14)")
         
-        # Load faster-whisper model (use small.en or distil-small.en for speed)
+        # Load faster-whisper model (use medium.en for best accuracy, small.en for balance)
         if WhisperModel:
-            model_name = os.getenv("LOCAL_WHISPER_MODEL", "distil-small.en")
+            model_name = os.getenv("LOCAL_WHISPER_MODEL", "medium.en")  # Changed default to medium.en for better accuracy
             device = os.getenv("WHISPER_DEVICE", "cpu")  # cpu, cuda, auto
-            compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")  # int8, int8_float16, int16, float16, float32
+            # Use float16 for better accuracy if GPU available, otherwise int8 for CPU (most compatible)
+            # int8_float16 provides better accuracy but may not work on all systems - will fallback automatically
+            compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8" if device == "cpu" else "float16")
             
-            try:
-                logger.info(f"Loading faster-whisper model | Model: {model_name} | Device: {device} | Compute: {compute_type}")
-                self.local_model = WhisperModel(
-                    model_name,
-                    device=device,
-                    compute_type=compute_type
-                )
-                logger.info(f"faster-whisper model loaded successfully | Model: {model_name}")
-            except Exception as e:
+            # Model fallback list (try smaller models if the requested one fails)
+            model_fallbacks = [model_name]
+            if model_name not in ["small.en", "distil-small.en", "base.en"]:
+                # If trying a larger model, add smaller fallbacks
+                if model_name == "medium.en":
+                    model_fallbacks.extend(["small.en", "distil-small.en"])
+                elif model_name == "large-v3.en" or model_name == "large-v3":
+                    model_fallbacks.extend(["medium.en", "small.en", "distil-small.en"])
+            
+            # Try loading with specified compute_type, fallback to simpler types if needed
+            compute_type_attempts = [compute_type]
+            if device == "cpu":
+                # For CPU, try fallback options if int8_float16 fails
+                if compute_type == "int8_float16":
+                    compute_type_attempts.extend(["int8", "float32"])
+                elif compute_type == "int8":
+                    compute_type_attempts.extend(["float32"])
+            
+            model_loaded = False
+            last_error = None
+            
+            # Try each model with each compute_type
+            for attempt_model in model_fallbacks:
+                for attempt_compute_type in compute_type_attempts:
+                    try:
+                        logger.info(f"Loading faster-whisper model | Model: {attempt_model} | Device: {device} | Compute: {attempt_compute_type}")
+                        self.local_model = WhisperModel(
+                            attempt_model,
+                            device=device,
+                            compute_type=attempt_compute_type
+                        )
+                        logger.info(f"✅ faster-whisper model loaded successfully | Model: {attempt_model} | Compute: {attempt_compute_type}")
+                        if attempt_model != model_name:
+                            logger.warning(f"⚠️  Using fallback model '{attempt_model}' instead of requested '{model_name}'")
+                        model_loaded = True
+                        break
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(
+                            f"Failed to load faster-whisper model | "
+                            f"Model: {attempt_model} | Compute: {attempt_compute_type} | "
+                            f"Error: {type(e).__name__}: {str(e)[:200]}"
+                        )
+                        if attempt_compute_type != compute_type_attempts[-1]:
+                            logger.info(f"Trying fallback compute_type...")
+                        continue
+                
+                if model_loaded:
+                    break
+                
+                if attempt_model != model_fallbacks[-1]:
+                    logger.info(f"Trying fallback model...")
+            
+            if not model_loaded:
                 logger.error(
-                    f"Failed to load faster-whisper model | Model: {model_name} | "
-                    f"Error: {type(e).__name__}: {str(e)}",
+                    f"❌ Failed to load faster-whisper model with all attempts | "
+                    f"Requested model: {model_name} | Device: {device} | "
+                    f"Attempted models: {model_fallbacks} | "
+                    f"Attempted compute_types: {compute_type_attempts} | "
+                    f"Last error: {type(last_error).__name__}: {str(last_error)[:500] if last_error else 'Unknown'}",
                     exc_info=True
+                )
+                logger.error(
+                    f"💡 Troubleshooting tips:\n"
+                    f"  1. Check if faster-whisper is installed: pip install faster-whisper\n"
+                    f"  2. Try a smaller model: Set LOCAL_WHISPER_MODEL=small.en or distil-small.en\n"
+                    f"  3. Try different compute_type: Set WHISPER_COMPUTE_TYPE=int8 (for CPU)\n"
+                    f"  4. Check available memory: medium.en requires ~2GB RAM, small.en requires ~500MB\n"
+                    f"  5. Check backend logs for detailed error messages\n"
+                    f"  6. Restart the backend server after changing environment variables"
                 )
                 self.local_model = None
         else:
@@ -267,6 +341,26 @@ class TranscriptionService:
                 if len(audio_np) == 0:
                     logger.debug("Empty audio array after conversion")
                     return ""
+                
+                # Audio preprocessing for better accuracy:
+                # 1. Remove DC offset (center around zero) - improves recognition
+                audio_np = audio_np - np.mean(audio_np)
+                
+                # 2. Normalize audio levels (prevent clipping and improve recognition)
+                max_val = np.abs(audio_np).max()
+                if max_val > 0.01:  # Only normalize if there's meaningful signal
+                    # Normalize to 0.95 to prevent clipping while maintaining volume
+                    audio_np = audio_np / max_val * 0.95
+                
+                # 3. Apply simple high-pass filter to remove low-frequency noise (helps with accuracy)
+                # Simple first-order high-pass filter at ~80Hz to remove rumble and background noise
+                if len(audio_np) > 1:
+                    alpha = 0.98  # Filter coefficient
+                    filtered = np.zeros_like(audio_np)
+                    filtered[0] = audio_np[0]
+                    for i in range(1, len(audio_np)):
+                        filtered[i] = alpha * (filtered[i-1] + audio_np[i] - audio_np[i-1])
+                    audio_np = filtered
             except (ValueError, TypeError) as e:
                 logger.warning(
                     f"Error converting audio data to numpy array | Error: {type(e).__name__}: {str(e)} | "
@@ -290,15 +384,23 @@ class TranscriptionService:
                         f"Duration: {audio_duration:.2f}s | Samples: {len(audio_np)}"
                     )
                     
-                    # faster-whisper transcribe options - optimized for low latency
+                    # faster-whisper transcribe options - optimized for maximum accuracy
+                    # Higher beam_size (10) for better accuracy at the cost of speed
+                    # Enabled condition_on_previous_text for better context understanding
+                    # Added compression_ratio_threshold and log_prob_threshold to filter low-quality segments
                     segments, info = self.local_model.transcribe(
                         audio_np,
                         language="en",  # Force English
-                        beam_size=1,  # Low latency
-                        temperature=0.0,
-                        condition_on_previous_text=False,
+                        beam_size=15,  # Increased to 15 for maximum accuracy (was 10)
+                        temperature=0.0,  # Keep at 0 for deterministic results
+                        condition_on_previous_text=True,  # Enabled for better context
                         word_timestamps=False,
                         vad_filter=False,  # Disabled: requires onnxruntime (not available for Python 3.14)
+                        best_of=10,  # Try 10 candidates and pick the best (increased from 5)
+                        compression_ratio_threshold=2.4,  # Filter out segments with high compression (likely repetitive or low quality)
+                        log_prob_threshold=-2.0,  # Lowered threshold to -2.0 to be even less aggressive and capture more content
+                        no_speech_threshold=0.4,  # Lowered to 0.4 to better detect speech and avoid cutting off early
+                        initial_prompt="This is a technical meeting transcription about PayU CheckoutPro SDK and wallet SDK development. Key terms: checkoutpro, CheckoutPro, checkout pro, PayU, PayU India, SDK, API, Android, iOS, React Native, Flutter, merchant, payment, transaction, integration, Bharatkosh, UPI, 3DS, MFA, TPAP, encryption, wrapper, CheckoutPro SDK, wallet SDK, wallet SDK DOC, Mia wallet, Akash. Common names: Akash, Mia. Common phrases: 'what is the status', 'what's the status', 'status of', 'did you finish', 'did you finished it', 'when are you planning', 'planning to finish', 'ETA', 'hey guys', 'hey Akash', 'today we are discussing about', 'let's talk about'. The speakers are discussing software development, technical implementation, APIs, project status, deadlines, and business decisions.",
                     )
                     
                     logger.info(
@@ -567,6 +669,11 @@ class AudioCaptureService:
         
         try:
             if system == "darwin":  # macOS
+                # Initialize variables before try block to avoid scope issues
+                blackhole_found = False
+                device_name = None
+                device_index = None
+                
                 # Try to find BlackHole or other virtual audio device first
                 # List available avfoundation devices
                 try:
@@ -580,8 +687,6 @@ class AudioCaptureService:
                     stderr_output = list_process.stderr.decode('utf-8', errors='ignore')
                     
                     # Look for BlackHole or other virtual audio devices in the output
-                    blackhole_found = False
-                    device_name = None
                     for line in stderr_output.split('\n'):
                         line_lower = line.lower()
                         if any(keyword in line_lower for keyword in ['blackhole', 'loopback', 'soundflower', 'virtual']):
@@ -597,6 +702,7 @@ class AudioCaptureService:
                                     break
                 except Exception as e:
                     logger.debug(f"Could not list avfoundation devices: {e}")
+                    blackhole_found = False  # Ensure it's set even if exception occurs
                 
                 # If no virtual device found, try to use system audio capture
                 if not blackhole_found:

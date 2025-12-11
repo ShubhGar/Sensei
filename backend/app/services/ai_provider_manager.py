@@ -1,8 +1,11 @@
 """
 AI Provider Manager - Manages switching between OpenAI and Bedrock providers
+Supports ensemble mode for improved accuracy by using both providers
 """
 import os
-from typing import Optional
+import json
+from typing import Optional, Tuple
+import asyncio
 from dotenv import load_dotenv
 from app.utils.logger import get_logger
 
@@ -32,7 +35,8 @@ class AIProviderManager:
         self,
         use_bedrock: Optional[bool] = None,
         enable_openai: Optional[bool] = None,
-        enable_bedrock: Optional[bool] = None
+        enable_bedrock: Optional[bool] = None,
+        use_ensemble: Optional[bool] = None
     ):
         """
         Initialize AI Provider Manager
@@ -41,6 +45,7 @@ class AIProviderManager:
             use_bedrock: Primary provider preference (True=Bedrock, False=OpenAI, None=auto from env)
             enable_openai: Enable/disable OpenAI service (None=auto from env)
             enable_bedrock: Enable/disable Bedrock service (None=auto from env)
+            use_ensemble: Use ensemble mode (both providers in parallel) for improved accuracy (None=auto from env)
         """
         # Determine provider preference
         if use_bedrock is None:
@@ -58,6 +63,12 @@ class AIProviderManager:
             self.enable_bedrock = os.getenv("ENABLE_BEDROCK", "true").lower() == "true"
         else:
             self.enable_bedrock = enable_bedrock
+        
+        # Determine ensemble mode
+        if use_ensemble is None:
+            self.use_ensemble = os.getenv("USE_ENSEMBLE_MODE", "false").lower() == "true"
+        else:
+            self.use_ensemble = use_ensemble
         
         # Initialize services
         self.openai_service = None
@@ -92,6 +103,15 @@ class AIProviderManager:
         # Determine primary provider
         self.primary_provider = self._determine_primary_provider()
         
+        # Validate ensemble mode requirements
+        if self.use_ensemble:
+            if not (self.is_openai_available() and self.is_bedrock_available()):
+                logger.warning(
+                    "Ensemble mode requested but both providers not available. "
+                    "Falling back to single provider mode."
+                )
+                self.use_ensemble = False
+        
         # Log initialization
         self._log_initialization()
     
@@ -119,11 +139,11 @@ class AIProviderManager:
             return
         
         primary_info = f"Primary: {self.primary_provider.upper()}"
-        fallback_info = f"Fallback: {'enabled' if len(providers) > 1 else 'none'}"
+        mode_info = "Ensemble Mode: ENABLED" if self.use_ensemble else f"Fallback: {'enabled' if len(providers) > 1 else 'none'}"
         
         logger.info(
             f"AI Provider Manager initialized | {primary_info} | "
-            f"Available: {', '.join(providers)} | {fallback_info}"
+            f"Available: {', '.join(providers)} | {mode_info}"
         )
     
     def get_primary_provider(self) -> str:
@@ -142,6 +162,111 @@ class AIProviderManager:
         """Check if any provider is available"""
         return self.is_openai_available() or self.is_bedrock_available()
     
+    def _merge_ensemble_responses(
+        self,
+        openai_response: str,
+        bedrock_response: str
+    ) -> str:
+        """
+        Intelligently merge responses from both providers for better accuracy
+        
+        Strategy:
+        1. If responses are very similar, use the longer/more detailed one
+        2. If responses differ significantly, combine key points from both
+        3. Prefer more structured/complete responses
+        
+        Args:
+            openai_response: Response from OpenAI
+            bedrock_response: Response from Bedrock
+            
+        Returns:
+            Merged response
+        """
+        # If responses are very similar (high overlap), use the longer one
+        openai_lower = openai_response.lower().strip()
+        bedrock_lower = bedrock_response.lower().strip()
+        
+        # Calculate similarity (simple word overlap)
+        openai_words = set(openai_lower.split())
+        bedrock_words = set(bedrock_lower.split())
+        
+        if len(openai_words) > 0 and len(bedrock_words) > 0:
+            overlap = len(openai_words & bedrock_words)
+            total_unique = len(openai_words | bedrock_words)
+            similarity = overlap / total_unique if total_unique > 0 else 0
+            
+            # If very similar (>80% overlap), use the longer/more detailed response
+            if similarity > 0.8:
+                if len(openai_response) > len(bedrock_response):
+                    logger.debug("Ensemble: Responses very similar, using OpenAI (longer)")
+                    return openai_response
+                else:
+                    logger.debug("Ensemble: Responses very similar, using Bedrock (longer)")
+                    return bedrock_response
+        
+        # If responses differ, combine them intelligently
+        # For structured content (JSON, lists), try to merge
+        if openai_response.strip().startswith('{') and bedrock_response.strip().startswith('{'):
+            # Both are JSON - prefer the more complete one
+            try:
+                openai_json = json.loads(openai_response)
+                bedrock_json = json.loads(bedrock_response)
+                
+                # Merge JSON objects, preferring non-empty values
+                merged = {}
+                all_keys = set(openai_json.keys()) | set(bedrock_json.keys())
+                for key in all_keys:
+                    openai_val = openai_json.get(key)
+                    bedrock_val = bedrock_json.get(key)
+                    
+                    # Prefer non-empty, more detailed values
+                    if openai_val and bedrock_val:
+                        # If both exist, prefer the longer/more detailed one
+                        if isinstance(openai_val, str) and isinstance(bedrock_val, str):
+                            merged[key] = openai_val if len(openai_val) > len(bedrock_val) else bedrock_val
+                        elif isinstance(openai_val, list) and isinstance(bedrock_val, list):
+                            # Merge lists, removing duplicates
+                            combined = openai_val + bedrock_val
+                            # Simple deduplication for list of strings
+                            if all(isinstance(x, str) for x in combined):
+                                merged[key] = list(dict.fromkeys(combined))  # Preserves order
+                            else:
+                                merged[key] = openai_val if len(openai_val) > len(bedrock_val) else bedrock_val
+                        else:
+                            merged[key] = openai_val if openai_val else bedrock_val
+                    else:
+                        merged[key] = openai_val or bedrock_val
+                
+                logger.debug("Ensemble: Merged JSON responses from both providers")
+                return json.dumps(merged, indent=2)
+            except:
+                # If JSON parsing fails, fall through to text merging
+                pass
+        
+        # For text responses, combine key points
+        # Use OpenAI as base (typically more structured) and add unique points from Bedrock
+        logger.debug("Ensemble: Combining text responses from both providers")
+        
+        # Simple strategy: Use OpenAI response, append unique insights from Bedrock
+        bedrock_unique = []
+        bedrock_sentences = bedrock_response.split('.')
+        openai_lower_words = set(openai_lower.split())
+        
+        for sentence in bedrock_sentences:
+            sentence_words = set(sentence.lower().split())
+            # If sentence has significant new content (>30% new words), include it
+            if len(sentence_words) > 0:
+                new_words = sentence_words - openai_lower_words
+                if len(new_words) / len(sentence_words) > 0.3:
+                    bedrock_unique.append(sentence.strip())
+        
+        if bedrock_unique:
+            combined = f"{openai_response}\n\nAdditional insights:\n" + ". ".join(bedrock_unique[:3])  # Limit to top 3 unique points
+            return combined
+        
+        # If no significant differences, use OpenAI (typically more consistent)
+        return openai_response
+    
     async def generate_text(
         self,
         prompt: str,
@@ -151,7 +276,7 @@ class AIProviderManager:
         response_format: Optional[dict] = None
     ) -> str:
         """
-        Generate text using the appropriate provider with fallback
+        Generate text using the appropriate provider with fallback or ensemble mode
         
         Args:
             prompt: User prompt
@@ -166,6 +291,61 @@ class AIProviderManager:
         Raises:
             Exception: If no providers are available or all fail
         """
+        # Ensemble mode: Use both providers in parallel and merge results
+        if self.use_ensemble and self.is_openai_available() and self.is_bedrock_available():
+            logger.info("Ensemble mode: Running both OpenAI and Bedrock in parallel")
+            
+            async def get_openai_response():
+                try:
+                    return await self.openai_service.generate_text(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format
+                    )
+                except Exception as e:
+                    logger.warning(f"Ensemble: OpenAI failed: {e}")
+                    return None
+            
+            async def get_bedrock_response():
+                try:
+                    return await self.bedrock_service.generate_text(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format
+                    )
+                except Exception as e:
+                    logger.warning(f"Ensemble: Bedrock failed: {e}")
+                    return None
+            
+            # Run both in parallel
+            openai_result, bedrock_result = await asyncio.gather(
+                get_openai_response(),
+                get_bedrock_response(),
+                return_exceptions=False
+            )
+            
+            # If both succeeded, merge them
+            if openai_result and bedrock_result:
+                logger.info("Ensemble: Both providers succeeded, merging responses")
+                return self._merge_ensemble_responses(openai_result, bedrock_result)
+            
+            # If only one succeeded, use it
+            if openai_result:
+                logger.info("Ensemble: Only OpenAI succeeded, using OpenAI response")
+                return openai_result
+            
+            if bedrock_result:
+                logger.info("Ensemble: Only Bedrock succeeded, using Bedrock response")
+                return bedrock_result
+            
+            # Both failed
+            raise Exception("Ensemble mode: Both OpenAI and Bedrock failed")
+        
+        # Single provider mode (existing fallback logic)
         # Try primary provider first
         if self.primary_provider == "bedrock" and self.is_bedrock_available():
             try:
@@ -224,4 +404,5 @@ class AIProviderManager:
         
         else:
             raise Exception("No AI providers available. Check configuration and credentials.")
+
 

@@ -31,9 +31,9 @@ import EmailIcon from '@mui/icons-material/Email'
 import GroupsIcon from '@mui/icons-material/Groups'
 import ForumIcon from '@mui/icons-material/Forum'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
-import SearchIcon from '@mui/icons-material/Search'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
+import AssignmentIcon from '@mui/icons-material/Assignment'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import SettingsIcon from '@mui/icons-material/Settings'
 import DarkModeIcon from '@mui/icons-material/DarkMode'
@@ -51,7 +51,7 @@ import OldMeetingsView from './components/OldMeetingsView'
 import TodoView from './components/TodoView'
 import AIChatAssistant from './components/AIChatAssistant'
 import TrendsView from './components/TrendsView'
-import SearchBar from './components/SearchBar'
+import MyJiraTasks from './components/MyJiraTasks'
 import { authAPI } from './services/api'
 
 function AppContent() {
@@ -252,7 +252,7 @@ function AppContent() {
               sx={{ 
                 display: 'flex', 
                 alignItems: 'center', 
-                gap: { xs: 0.5, sm: 1, md: 1.5 },
+                gap: { xs: 0.25, sm: 0.5, md: 0.75 },
                 flexWrap: { xs: 'wrap', sm: 'nowrap' },
                 flexGrow: { xs: 1, md: 0 },
                 justifyContent: { xs: 'flex-start', md: 'flex-end' },
@@ -270,15 +270,15 @@ function AppContent() {
                   fontWeight: isActive('/') ? 700 : 500,
                   bgcolor: isActive('/') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
                   borderRadius: isActive('/') ? 2 : 0,
-                  px: { xs: 1, sm: 1.5, md: 2.5 },
-                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  px: { xs: 0.75, sm: 1, md: 1.5 },
+                  py: { xs: 0.5, sm: 0.625, md: 0.75 },
                   fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
                   borderBottom: isActive('/') ? '3px solid' : 'none',
                   borderBottomColor: 'primary.main',
                   transition: 'all 0.2s ease',
                   minWidth: { xs: 'auto', sm: '64px' },
                   '& .MuiButton-startIcon': {
-                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                    marginRight: { xs: 0, sm: 0.25, md: 0.5 },
                   },
                   '&:hover': {
                     bgcolor: isActive('/') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
@@ -299,15 +299,15 @@ function AppContent() {
                   fontWeight: isActive('/transcription') ? 700 : 500,
                   bgcolor: isActive('/transcription') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
                   borderRadius: isActive('/transcription') ? 2 : 0,
-                  px: { xs: 1, sm: 1.5, md: 2.5 },
-                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  px: { xs: 0.75, sm: 1, md: 1.5 },
+                  py: { xs: 0.5, sm: 0.625, md: 0.75 },
                   fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
                   borderBottom: isActive('/transcription') ? '3px solid' : 'none',
                   borderBottomColor: 'primary.main',
                   transition: 'all 0.2s ease',
                   minWidth: { xs: 'auto', sm: '64px' },
                   '& .MuiButton-startIcon': {
-                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                    marginRight: { xs: 0, sm: 0.25, md: 0.5 },
                   },
                   '&:hover': {
                     bgcolor: isActive('/transcription') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
@@ -328,15 +328,15 @@ function AppContent() {
                   fontWeight: isActive('/communications') ? 700 : 500,
                   bgcolor: isActive('/communications') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
                   borderRadius: isActive('/communications') ? 2 : 0,
-                  px: { xs: 1, sm: 1.5, md: 2.5 },
-                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  px: { xs: 0.75, sm: 1, md: 1.5 },
+                  py: { xs: 0.5, sm: 0.625, md: 0.75 },
                   fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
                   borderBottom: isActive('/communications') ? '3px solid' : 'none',
                   borderBottomColor: 'primary.main',
                   transition: 'all 0.2s ease',
                   minWidth: { xs: 'auto', sm: '64px' },
                   '& .MuiButton-startIcon': {
-                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                    marginRight: { xs: 0, sm: 0.25, md: 0.5 },
                   },
                   '&:hover': {
                     bgcolor: isActive('/communications') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
@@ -357,15 +357,15 @@ function AppContent() {
                   fontWeight: isActive('/todos') ? 700 : 500,
                   bgcolor: isActive('/todos') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
                   borderRadius: isActive('/todos') ? 2 : 0,
-                  px: { xs: 1, sm: 1.5, md: 2.5 },
-                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  px: { xs: 0.75, sm: 1, md: 1.5 },
+                  py: { xs: 0.5, sm: 0.625, md: 0.75 },
                   fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
                   borderBottom: isActive('/todos') ? '3px solid' : 'none',
                   borderBottomColor: 'primary.main',
                   transition: 'all 0.2s ease',
                   minWidth: { xs: 'auto', sm: '64px' },
                   '& .MuiButton-startIcon': {
-                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                    marginRight: { xs: 0, sm: 0.25, md: 0.5 },
                   },
                   '&:hover': {
                     bgcolor: isActive('/todos') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
@@ -379,6 +379,35 @@ function AppContent() {
               </Button>
               <Button
                 component={Link}
+                to="/jira-tasks"
+                startIcon={<AssignmentIcon />}
+                sx={{
+                  color: isActive('/jira-tasks') ? 'primary.main' : 'text.secondary',
+                  fontWeight: isActive('/jira-tasks') ? 700 : 500,
+                  bgcolor: isActive('/jira-tasks') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
+                  borderRadius: isActive('/jira-tasks') ? 2 : 0,
+                  px: { xs: 0.75, sm: 1, md: 1.5 },
+                  py: { xs: 0.5, sm: 0.625, md: 0.75 },
+                  fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
+                  borderBottom: isActive('/jira-tasks') ? '3px solid' : 'none',
+                  borderBottomColor: 'primary.main',
+                  transition: 'all 0.2s ease',
+                  minWidth: { xs: 'auto', sm: '64px' },
+                  '& .MuiButton-startIcon': {
+                    marginRight: { xs: 0, sm: 0.25, md: 0.5 },
+                  },
+                  '&:hover': {
+                    bgcolor: isActive('/jira-tasks') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
+                    borderRadius: 2,
+                  },
+                }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                  JIRA Tasks
+                </Box>
+              </Button>
+              <Button
+                component={Link}
                 to="/ai-assistant"
                 startIcon={<SmartToyIcon />}
                 sx={{
@@ -386,15 +415,15 @@ function AppContent() {
                   fontWeight: isActive('/ai-assistant') ? 700 : 500,
                   bgcolor: isActive('/ai-assistant') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
                   borderRadius: isActive('/ai-assistant') ? 2 : 0,
-                  px: { xs: 1, sm: 1.5, md: 2.5 },
-                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  px: { xs: 0.75, sm: 1, md: 1.5 },
+                  py: { xs: 0.5, sm: 0.625, md: 0.75 },
                   fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
                   borderBottom: isActive('/ai-assistant') ? '3px solid' : 'none',
                   borderBottomColor: 'primary.main',
                   transition: 'all 0.2s ease',
                   minWidth: { xs: 'auto', sm: '64px' },
                   '& .MuiButton-startIcon': {
-                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                    marginRight: { xs: 0, sm: 0.25, md: 0.5 },
                   },
                   '&:hover': {
                     bgcolor: isActive('/ai-assistant') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
@@ -415,15 +444,15 @@ function AppContent() {
                   fontWeight: isActive('/trends') ? 700 : 500,
                   bgcolor: isActive('/trends') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
                   borderRadius: isActive('/trends') ? 2 : 0,
-                  px: { xs: 1, sm: 1.5, md: 2.5 },
-                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  px: { xs: 0.75, sm: 1, md: 1.5 },
+                  py: { xs: 0.5, sm: 0.625, md: 0.75 },
                   fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
                   borderBottom: isActive('/trends') ? '3px solid' : 'none',
                   borderBottomColor: 'primary.main',
                   transition: 'all 0.2s ease',
                   minWidth: { xs: 'auto', sm: '64px' },
                   '& .MuiButton-startIcon': {
-                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                    marginRight: { xs: 0, sm: 0.25, md: 0.5 },
                   },
                   '&:hover': {
                     bgcolor: isActive('/trends') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
@@ -439,16 +468,15 @@ function AppContent() {
             <Box 
               sx={{ 
                 display: 'flex', 
-                gap: { xs: 0.75, sm: 1 }, 
+                gap: { xs: 0.5, sm: 0.75 }, 
                 alignItems: 'center', 
                 flexWrap: 'nowrap',
                 flexShrink: 0,
                 order: { xs: 2, md: 0 },
-                ml: { xs: 0, md: 1 },
+                ml: { xs: 0, md: 0.5 },
               }}
             >
-              <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' }, height: 32, mx: { xs: 0.5, sm: 1 } }} />
-              <SearchBar />
+              <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' }, height: 32, mx: { xs: 0.25, sm: 0.5 } }} />
               {isAuthenticated ? (
                 <>
                   <Chip
@@ -625,6 +653,7 @@ function AppContent() {
             <Route path="/teams" element={<TeamsView />} />
             <Route path="/meetings" element={<OldMeetingsView />} />
             <Route path="/todos" element={<TodoView />} />
+            <Route path="/jira-tasks" element={<MyJiraTasks />} />
             <Route path="/ai-assistant" element={<AIChatAssistant />} />
             <Route path="/trends" element={<TrendsView />} />
             <Route path="/auth/success" element={<Box sx={{ textAlign: 'center', py: 4 }}><Typography>Authentication successful! Redirecting...</Typography></Box>} />

@@ -21,7 +21,8 @@ class AIService:
         self,
         use_bedrock: Optional[bool] = None,
         enable_openai: Optional[bool] = None,
-        enable_bedrock: Optional[bool] = None
+        enable_bedrock: Optional[bool] = None,
+        use_ensemble: Optional[bool] = None
     ):
         """
         Initialize AI Service
@@ -30,12 +31,14 @@ class AIService:
             use_bedrock: Primary provider preference (True=Bedrock, False=OpenAI, None=auto from env)
             enable_openai: Enable/disable OpenAI service (None=auto from env, can be set to False to disable)
             enable_bedrock: Enable/disable Bedrock service (None=auto from env, can be set to False to disable)
+            use_ensemble: Use ensemble mode (both providers in parallel) for improved accuracy (None=auto from env)
         """
         # Initialize provider manager
         self.provider_manager = AIProviderManager(
             use_bedrock=use_bedrock,
             enable_openai=enable_openai,
-            enable_bedrock=enable_bedrock
+            enable_bedrock=enable_bedrock,
+            use_ensemble=use_ensemble
         )
         
         # Expose provider info for backward compatibility
@@ -1440,6 +1443,10 @@ Provide analysis in JSON format:
 - 61-80: High priority (action required, deadlines, important decisions)
 - 81-100: Critical priority (urgent, blocking, executive communication, emergencies)
 
+Also detect:
+- "waiting_for_us": true if the sender is explicitly waiting for a response/action from us (e.g., "waiting for your response", "pending your approval", "need your input", "awaiting your feedback")
+- "blocked_on_us": true if someone is blocked and waiting for us (e.g., "blocked on you", "waiting on you", "stuck waiting", "can't proceed without", "depends on you")
+
 Subject: {subject}
 From: {sender}
 Content: {email_content[:2000]}
@@ -1449,6 +1456,10 @@ Return JSON:
 {{
     "priority_score": 0-100,
     "priority_level": "low|medium|high|critical",
+    "urgency_score": 0-100,
+    "criticality_score": 0-100,
+    "waiting_for_us": true/false,
+    "blocked_on_us": true/false,
     "factors": ["factor1", "factor2", ...],
     "reasoning": "..."
 }}"""
@@ -1473,6 +1484,81 @@ Return JSON:
             return {
                 "priority_score": 50,
                 "priority_level": "medium",
+                "urgency_score": 50,
+                "criticality_score": 50,
+                "waiting_for_us": False,
+                "blocked_on_us": False,
+                "factors": []
+            }
+    
+    async def score_teams_message_priority(
+        self,
+        message_content: str,
+        sender: str,
+        sent_at: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Score Teams message priority by importance (0-100)"""
+        if not self.provider_manager.has_any_provider():
+            return {
+                "priority_score": 50,
+                "priority_level": "medium",
+                "urgency_score": 50,
+                "criticality_score": 50,
+                "waiting_for_us": False,
+                "blocked_on_us": False,
+                "factors": []
+            }
+        
+        prompt = f"""Score the priority of this Teams message on a scale of 0-100, where:
+- 0-30: Low priority (informational, casual chat, non-urgent)
+- 31-60: Medium priority (normal business communication)
+- 61-80: High priority (action required, deadlines, important decisions)
+- 81-100: Critical priority (urgent, blocking, @mentions, emergencies)
+
+Also detect:
+- "waiting_for_us": true if the sender is explicitly waiting for a response/action from us (e.g., "waiting for your response", "pending your approval", "need your input", "awaiting your feedback", "when can you", "can you please")
+- "blocked_on_us": true if someone is blocked and waiting for us (e.g., "blocked on you", "waiting on you", "stuck waiting", "can't proceed without", "depends on you", "blocked by")
+
+From: {sender}
+Content: {message_content[:2000]}
+Sent: {sent_at or "Unknown"}
+
+Return JSON:
+{{
+    "priority_score": 0-100,
+    "priority_level": "low|medium|high|critical",
+    "urgency_score": 0-100,
+    "criticality_score": 0-100,
+    "waiting_for_us": true/false,
+    "blocked_on_us": true/false,
+    "factors": ["factor1", "factor2", ...],
+    "reasoning": "..."
+}}"""
+
+        system_prompt = "You are an expert at prioritizing Teams messages based on importance, urgency, and business impact."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.2,
+                max_tokens=1024,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error scoring Teams message priority | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "priority_score": 50,
+                "priority_level": "medium",
+                "urgency_score": 50,
+                "criticality_score": 50,
+                "waiting_for_us": False,
+                "blocked_on_us": False,
                 "factors": []
             }
     

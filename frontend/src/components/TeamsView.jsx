@@ -109,7 +109,35 @@ const TeamsView = () => {
       setSummary(response.data)
       const messagesList = response.data.messages || []
       console.log('[TeamsView] Messages list:', messagesList.length, messagesList)
-      setMessages(messagesList)
+      
+      // Sort messages by criticality and urgency (highest first)
+      const sortedMessages = [...messagesList].sort((a, b) => {
+        // First, prioritize "blocked on us" and "waiting for us"
+        const aBlocked = a.priority_score?.blocked_on_us ? 1000 : 0
+        const bBlocked = b.priority_score?.blocked_on_us ? 1000 : 0
+        const aWaiting = a.priority_score?.waiting_for_us ? 500 : 0
+        const bWaiting = b.priority_score?.waiting_for_us ? 500 : 0
+        
+        // Then by criticality score
+        const aCriticality = a.priority_score?.criticality_score || a.priority_score?.priority_score || 0
+        const bCriticality = b.priority_score?.criticality_score || b.priority_score?.priority_score || 0
+        
+        // Then by urgency score
+        const aUrgency = a.priority_score?.urgency_score || a.priority_score?.priority_score || 0
+        const bUrgency = b.priority_score?.urgency_score || b.priority_score?.priority_score || 0
+        
+        // Then by priority score
+        const aPriority = a.priority_score?.priority_score || 0
+        const bPriority = b.priority_score?.priority_score || 0
+        
+        // Calculate total score
+        const aTotal = aBlocked + aWaiting + aCriticality + aUrgency + aPriority
+        const bTotal = bBlocked + bWaiting + bCriticality + bUrgency + bPriority
+        
+        return bTotal - aTotal // Descending order (highest first)
+      })
+      
+      setMessages(sortedMessages)
       
       // Only show error if there are no messages AND there's an error
       // If we have messages (even dummy data), don't show errors
@@ -702,16 +730,22 @@ const TeamsView = () => {
                     borderColor: 'secondary.light',
                     borderRadius: 2,
                     mb: 1.5,
-                    bgcolor: message.is_urgent 
+                    bgcolor: (message.priority_score?.blocked_on_us 
+                      ? (mode === 'dark' ? '#4A1A1A' : '#FFEBEE')
+                      : message.priority_score?.waiting_for_us
                       ? (mode === 'dark' ? '#3A2A1E' : '#FFF8E1')
-                      : 'background.paper',
+                      : message.priority_score?.priority_score >= 80
+                      ? (mode === 'dark' ? '#3A2A1E' : '#FFF8E1')
+                      : message.is_urgent 
+                      ? (mode === 'dark' ? '#3A2A1E' : '#FFF8E1')
+                      : 'background.paper'),
                     transition: 'all 0.2s ease',
                     '&:hover': {
                       boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
                       transform: 'translateY(-2px)',
                     },
-                    borderLeft: message.is_urgent ? '4px solid' : 'none',
-                    borderLeftColor: message.is_urgent ? 'error.main' : 'transparent',
+                    borderLeft: (message.priority_score?.blocked_on_us || message.priority_score?.waiting_for_us || message.priority_score?.priority_score >= 80 || message.is_urgent) ? '4px solid' : 'none',
+                    borderLeftColor: message.priority_score?.blocked_on_us ? 'error.dark' : (message.priority_score?.waiting_for_us ? 'warning.dark' : (message.priority_score?.priority_score >= 80 ? 'error.main' : (message.is_urgent ? 'error.main' : 'transparent'))),
                     cursor: 'context-menu',
                   }}
                 >

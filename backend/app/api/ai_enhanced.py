@@ -668,11 +668,43 @@ async def convert_to_jira(
 async def get_jira_projects():
     """Get list of accessible JIRA projects"""
     try:
+        # Check if JIRA is configured
+        if not jira_integration.jira_url or not jira_integration.jira_username or not jira_integration.jira_api_token:
+            logger.warning("JIRA credentials not configured")
+            raise HTTPException(
+                status_code=400,
+                detail="JIRA credentials not configured. Please set JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN in .env file"
+            )
+        
         projects = await jira_integration.get_projects()
-        return {"projects": projects}
+        if not projects:
+            logger.warning("No JIRA projects returned (empty list)")
+            return []
+        # Return array directly (not wrapped in object) for frontend compatibility
+        return projects
+    except HTTPException:
+        raise
     except ValueError as e:
-        logger.error(f"Error fetching JIRA projects: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        logger.error(f"Error fetching JIRA projects: {error_msg}")
+        # Provide helpful error messages
+        if "credentials not configured" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail="JIRA credentials not configured. Please set JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN in .env file"
+            )
+        elif "401" in error_msg or "unauthorized" in error_msg.lower() or "authentication" in error_msg.lower():
+            raise HTTPException(
+                status_code=401,
+                detail="JIRA authentication failed. Please check your JIRA_USERNAME and JIRA_API_TOKEN in .env file"
+            )
+        elif "403" in error_msg or "forbidden" in error_msg.lower():
+            raise HTTPException(
+                status_code=403,
+                detail="JIRA access forbidden. Please check your JIRA permissions and API token"
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Error fetching JIRA projects: {error_msg}")
     except Exception as e:
         logger.error(f"Error fetching JIRA projects: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error fetching JIRA projects: {str(e)}")
@@ -708,6 +740,115 @@ async def create_jira_issue(
     except Exception as e:
         logger.error(f"Error creating JIRA issue: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error creating JIRA issue: {str(e)}")
+
+
+@router.post("/generate-jira-issues/{session_id}")
+async def generate_jira_issues_from_transcript(
+    session_id: str,
+    project_key: str = Query(..., description="JIRA project key"),
+    issue_type: str = Query("Task", description="Issue type"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate JIRA issues from transcript/MOM action items"""
+    try:
+        logger.info(f"[AI Enhanced] Generating JIRA issues from transcript for session: {session_id}")
+        
+        # Get meeting session
+        from sqlalchemy import select
+        from app.database import MeetingSession
+        result = await db.execute(
+            select(MeetingSession).where(MeetingSession.id == session_id)
+        )
+        session = result.scalar_one_or_none()
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="Meeting session not found")
+        
+        # Get transcript and MOM
+        transcript = session.full_transcript or session.transcript or ""
+        mom = session.mom or {}
+        
+        if not transcript:
+            raise HTTPException(status_code=400, detail="No transcript available")
+        
+        # Extract action items from MOM if available, otherwise generate from transcript
+        action_items = mom.get("action_items", []) if isinstance(mom, dict) else []
+        
+        if not action_items:
+            # Generate action items from transcript using AI
+            logger.info(f"[AI Enhanced] No action items in MOM, generating from transcript...")
+            try:
+                mom_data = await ai_service.generate_mom(transcript=transcript, session_id=session_id)
+                action_items = mom_data.get("action_items", [])
+            except Exception as e:
+                logger.warning(f"[AI Enhanced] Error generating action items: {e}")
+                action_items = []
+        
+        # Create JIRA issues from action items
+        created_issues = []
+        for item in action_items:
+            if isinstance(item, dict):
+                task = item.get("task", "Untitled Task")
+                context = item.get("context", "")
+                owner = item.get("owner", "TBD")
+                deadline = item.get("deadline", "")
+                
+                # Build description with context
+                description = f"{context}\n\nOwner: {owner}"
+                if deadline:
+                    description += f"\nDeadline: {deadline}"
+                description += f"\n\nSource: Meeting - {session.title or 'Untitled Meeting'}"
+                
+                # Map priority - normalize to JIRA format
+                priority_raw = item.get("priority", "medium")
+                if isinstance(priority_raw, str):
+                    priority_lower = priority_raw.lower().strip()
+                    # Map to JIRA priority names: Highest, High, Medium, Low, Lowest
+                    priority_map = {
+                        "unspecified": "Medium",
+                        "normal": "Medium",
+                        "medium": "Medium",
+                        "low": "Low",
+                        "high": "High",
+                        "critical": "Highest",
+                        "urgent": "High",
+                        "important": "High",
+                        "highest": "Highest",
+                        "lowest": "Lowest"
+                    }
+                    priority = priority_map.get(priority_lower, "Medium")  # Default to Medium
+                else:
+                    priority = "Medium"
+                
+                try:
+                    result = await jira_integration.create_issue(
+                        project_key=project_key,
+                        summary=task[:255],  # JIRA summary max length
+                        description=description,
+                        issue_type=issue_type,
+                        priority=priority,
+                        labels=["meeting-generated"],
+                        assignee=None  # Can be set later
+                    )
+                    created_issues.append(result)
+                except Exception as e:
+                    logger.warning(f"[AI Enhanced] Error creating JIRA issue for task '{task}': {e}")
+                    # Continue with other items even if one fails
+                    continue
+        
+        logger.info(f"[AI Enhanced] Successfully created {len(created_issues)} JIRA issues from session {session_id}")
+        return {
+            "success": True,
+            "created_count": len(created_issues),
+            "issues": created_issues,
+            "message": f"Created {len(created_issues)} JIRA issue(s) from meeting action items"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AI Enhanced] Error generating JIRA issues: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating JIRA issues: {str(e)}")
 
 
 @router.post("/convert/confluence", response_model=ConfluencePage)
@@ -823,4 +964,48 @@ async def get_smart_notifications(
     except Exception as e:
         logger.error(f"Error generating smart notifications: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating notifications: {str(e)}")
+
+
+@router.get("/jira/my-issues")
+async def get_my_jira_issues(
+    status: Optional[str] = Query(None, description="Filter by status (e.g., 'In Progress', 'To Do')"),
+    max_results: int = Query(100, ge=1, le=500, description="Maximum number of issues to return")
+):
+    """Get JIRA issues assigned to the current user, sorted by urgency and priority"""
+    try:
+        logger.info(f"[JIRA] Fetching issues assigned to user | Status filter: {status} | Max results: {max_results}")
+        
+        issues = await jira_integration.get_assigned_issues(
+            status=status,
+            max_results=max_results
+        )
+        
+        return {
+            "issues": issues,
+            "count": len(issues),
+            "sorted_by": "urgency_score,priority,updated_date"
+        }
+    except ValueError as e:
+        error_msg = str(e)
+        logger.error(f"Error fetching assigned JIRA issues: {error_msg}")
+        if "credentials not configured" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail="JIRA credentials not configured. Please set JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN in .env file"
+            )
+        elif "401" in error_msg or "unauthorized" in error_msg.lower() or "authentication" in error_msg.lower():
+            raise HTTPException(
+                status_code=401,
+                detail="JIRA authentication failed. Please check your JIRA_USERNAME and JIRA_API_TOKEN in .env file"
+            )
+        elif "403" in error_msg or "forbidden" in error_msg.lower():
+            raise HTTPException(
+                status_code=403,
+                detail="JIRA access forbidden. Please check your JIRA permissions and API token"
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Error fetching JIRA issues: {error_msg}")
+    except Exception as e:
+        logger.error(f"Error fetching assigned JIRA issues: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error fetching JIRA issues: {str(e)}")
 

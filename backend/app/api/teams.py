@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 import logging
 import time
+import asyncio
 
 from app.models.schemas import TeamsSummary, SendTeamsMessageRequest, SendTeamsMessageResponse
 from app.integrations.teams_integration import TeamsIntegration
@@ -84,6 +85,54 @@ async def get_messages(
         error = result.get("error")
         error_type = result.get("error_type")
         is_dummy_data = result.get("is_dummy_data", False)
+        
+        # Always enhance messages with priority scoring for sorting
+        # Process in parallel with timeout to avoid blocking
+        
+        async def score_message_priority_with_timeout(message, timeout=3.0):
+            """Score Teams message priority with timeout"""
+            content = message.get("content", "")
+            sender = message.get("sender", "")
+            sent_at = message.get("sent_at")
+            
+            try:
+                priority = await asyncio.wait_for(
+                    ai_service.score_teams_message_priority(content, sender, sent_at),
+                    timeout=timeout
+                )
+                message["priority_score"] = priority
+                # Set default urgency and criticality if not provided
+                if "urgency_score" not in priority:
+                    priority["urgency_score"] = priority.get("priority_score", 50)
+                if "criticality_score" not in priority:
+                    priority["criticality_score"] = priority.get("priority_score", 50)
+            except asyncio.TimeoutError:
+                logger.warning(f"[Teams] Priority scoring timeout for message {message.get('message_id')}")
+                message["priority_score"] = {
+                    "priority_score": 50,
+                    "priority_level": "medium",
+                    "urgency_score": 50,
+                    "criticality_score": 50,
+                    "waiting_for_us": False,
+                    "blocked_on_us": False,
+                    "factors": []
+                }
+            except Exception as e:
+                logger.warning(f"[Teams] Error scoring priority for message {message.get('message_id')}: {e}")
+                message["priority_score"] = {
+                    "priority_score": 50,
+                    "priority_level": "medium",
+                    "urgency_score": 50,
+                    "criticality_score": 50,
+                    "waiting_for_us": False,
+                    "blocked_on_us": False,
+                    "factors": []
+                }
+        
+        # Process messages in parallel batches (limit to 20 for performance)
+        messages_to_score = messages[:20]
+        if messages_to_score:
+            await asyncio.gather(*[score_message_priority_with_timeout(message) for message in messages_to_score], return_exceptions=True)
         
         # If dummy data is being used, log it
         if is_dummy_data:

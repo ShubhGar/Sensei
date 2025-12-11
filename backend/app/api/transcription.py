@@ -17,6 +17,7 @@ import numpy as np
 from app.database import get_db, MeetingSession
 from app.models.schemas import MeetingSessionCreate, MeetingSessionResponse, MeetingDetailsResponse, TranscriptUpdateRequest
 from app.services.transcription_service import TranscriptionService, AudioCaptureService
+from app.services.assemblyai_service import AssemblyAIService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,10 +47,14 @@ transcription_service = TranscriptionService()
 # Initialize audio capture service for system audio
 audio_capture_service = AudioCaptureService()
 
+# Initialize Assembly AI service
+assemblyai_service = AssemblyAIService()
+
 
 def merge_transcripts_with_labels(user_transcripts: List[Tuple[float, str]], 
                                   audience_transcripts: List[Tuple[float, str]]) -> str:
     """Merge transcripts from user and audience chronologically with speaker labels
+    Detects duplicate content from both sources and merges them intelligently
     
     Args:
         user_transcripts: List of (timestamp, text) tuples for user microphone
@@ -60,12 +65,33 @@ def merge_transcripts_with_labels(user_transcripts: List[Tuple[float, str]],
     """
     # Combine all transcripts with their source labels
     all_transcripts = []
+    processed_audience = set()  # Track processed audience transcripts to avoid duplicates
+    
+    # Process user transcripts first
     for timestamp, text in user_transcripts:
         if text and text.strip():
             all_transcripts.append((timestamp, "User", text.strip()))
+    
+    # Process audience transcripts, but skip if very similar to recent user transcript
     for timestamp, text in audience_transcripts:
         if text and text.strip():
-            all_transcripts.append((timestamp, "Audience", text.strip()))
+            text_clean = text.strip().lower()
+            
+            # Check if this audience transcript is similar to any recent user transcript
+            # (within 5 seconds and >80% similarity)
+            is_duplicate = False
+            for user_ts, user_text in user_transcripts:
+                if abs(timestamp - user_ts) <= 5.0:  # Within 5 seconds
+                    user_clean = user_text.strip().lower()
+                    # Simple similarity check: if one contains the other or vice versa
+                    if (text_clean in user_clean or user_clean in text_clean or 
+                        len(set(text_clean.split()) & set(user_clean.split())) / max(len(text_clean.split()), len(user_clean.split())) > 0.8):
+                        is_duplicate = True
+                        break
+            
+            # Only add audience transcript if it's not a duplicate of user transcript
+            if not is_duplicate:
+                all_transcripts.append((timestamp, "Audience", text.strip()))
     
     # Sort by timestamp
     all_transcripts.sort(key=lambda x: x[0])
@@ -478,7 +504,12 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
     is_recording = True
     WEBM_HEADER = b'\x1a\x45\xdf\xa3'  # WebM/Matroska EBML header
     
-    logger.info(f"[Audio Capture] User microphone WebSocket ready for session {session_id} - Final transcription mode")
+    # Real-time transcription: transcribe every 8 seconds (increased to allow more complete sentences)
+    last_transcription_time = time.time()
+    transcription_interval = 8.0  # Transcribe every 8 seconds (increased from 5s to allow complete sentences)
+    transcribed_buffer_size = 0  # Track how much we've already transcribed
+    
+    logger.info(f"[Audio Capture] User microphone WebSocket ready for session {session_id} - Real-time transcription mode (every {transcription_interval}s)")
     
     try:
         while is_recording:
@@ -531,6 +562,61 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
                     logger.info(f"[Audio Capture] 🎙️ User microphone capture started - Chunk #{user_chunk_count}: {len(webm_bytes)} bytes | WebM Buffer: {len(webm_buffer)} bytes | Total: {total_user_bytes} bytes")
                 elif user_chunk_count % 10 == 0:
                     logger.info(f"[Audio Capture] 🎙️ Chunk #{user_chunk_count}: {len(webm_bytes)} bytes | WebM Buffer: {len(webm_buffer)} bytes | Total: {total_user_bytes} bytes")
+                
+                # Real-time transcription: transcribe periodically (every 8 seconds)
+                current_time = time.time()
+                # Increased threshold: need at least 100KB new data (was 50KB) to ensure we have enough audio for complete sentences
+                if current_time - last_transcription_time >= transcription_interval and len(webm_buffer) > transcribed_buffer_size + 100000:  # At least 100KB new data
+                    try:
+                        # Get the new audio since last transcription
+                        new_audio = webm_buffer[transcribed_buffer_size:]
+                        if len(new_audio) > 20000:  # Minimum 20KB to transcribe (increased from 10KB for better quality)
+                            logger.info(f"[Transcription] 🔄 Real-time transcription triggered - New audio: {len(new_audio)} bytes | Total buffer: {len(webm_buffer)} bytes")
+                            
+                            # Convert and transcribe the new audio
+                            pcm_data = await transcription_service.convert_webm_to_pcm(bytes(new_audio))
+                            if pcm_data and len(pcm_data) > 0:
+                                transcript = await transcription_service.transcribe_audio_chunk(pcm_data, language='en', audio_format='pcm')
+                                
+                                if transcript and transcript.strip():
+                                    timestamp = time.time()
+                                    
+                                    # Store transcript with timestamp
+                                    async with get_active_sessions_lock():
+                                        if session_id in active_sessions:
+                                            active_data = active_sessions[session_id]
+                                            active_data["user_transcripts"].append((timestamp, transcript))
+                                            
+                                            # Merge all transcripts
+                                            user_transcripts = active_data.get("user_transcripts", [])
+                                            audience_transcripts = active_data.get("audience_transcripts", [])
+                                            merged_transcript = merge_transcripts_with_labels(user_transcripts, audience_transcripts)
+                                            
+                                            active_data["full_transcript"] = merged_transcript
+                                            
+                                            # Send real-time transcript to client
+                                            try:
+                                                message = {
+                                                    "type": "transcript",
+                                                    "speaker": "User",
+                                                    "text": transcript,
+                                                    "full_transcript": merged_transcript
+                                                }
+                                                await websocket.send_json(message)
+                                                logger.info(f"[Transcription] ✅ Sent real-time transcript: {transcript[:50]}...")
+                                            except (WebSocketDisconnect, RuntimeError):
+                                                pass
+                                    
+                                    # Update transcription tracking
+                                    transcribed_buffer_size = len(webm_buffer)
+                                    last_transcription_time = current_time
+                                else:
+                                    logger.debug(f"[Transcription] Real-time transcription returned empty (silence or no speech)")
+                            else:
+                                logger.debug(f"[Transcription] WebM conversion failed for real-time chunk")
+                    except Exception as e:
+                        logger.warning(f"[Transcription] Error in real-time transcription: {e}", exc_info=True)
+                        # Don't break the loop, just log and continue
             elif "close" in data:
                 is_recording = False
                 break
@@ -546,13 +632,18 @@ async def websocket_transcription(websocket: WebSocket, session_id: str):
         except:
             pass
     finally:
-        # Process accumulated audio for final transcription
-        if webm_buffer and len(webm_buffer) > 1000:  # Minimum size check
+        # Process any remaining accumulated audio for final transcription
+        # Only transcribe the part we haven't transcribed yet
+        remaining_audio_size = len(webm_buffer) - transcribed_buffer_size
+        if remaining_audio_size > 5000:  # Minimum size check (increased from 1000 to ensure quality)
             try:
-                logger.info(f"[Transcription] Processing final accumulated audio - WebM buffer: {len(webm_buffer)} bytes")
+                logger.info(f"[Transcription] Processing final accumulated audio - Remaining: {remaining_audio_size} bytes | Total buffer: {len(webm_buffer)} bytes")
                 
-                # Convert entire WebM buffer to PCM
-                pcm_data = await transcription_service.convert_webm_to_pcm(bytes(webm_buffer))
+                # Get the remaining audio that hasn't been transcribed
+                remaining_audio = webm_buffer[transcribed_buffer_size:]
+                
+                # Convert remaining WebM buffer to PCM
+                pcm_data = await transcription_service.convert_webm_to_pcm(bytes(remaining_audio))
                 
                 if pcm_data and len(pcm_data) > 0:
                     logger.info(f"[Transcription] ✅ WebM conversion successful! PCM size: {len(pcm_data)} bytes")
@@ -649,14 +740,19 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
     total_system_bytes = 0
     system_chunk_count = 0
     
+    # Real-time transcription: transcribe every 8 seconds (increased to allow more complete sentences)
+    last_transcription_time = time.time()
+    transcription_interval = 8.0  # Transcribe every 8 seconds (increased from 5s to allow complete sentences)
+    transcribed_buffer_size = 0  # Track how much we've already transcribed
+    
     try:
         # Start system audio capture
         logger.info(f"[Transcription] Starting system audio capture for session {session_id}")
         audio_capture_service.is_recording = True
         
-        # Create a task to handle audio capture (just accumulate, don't transcribe)
+        # Create a task to handle audio capture with real-time transcription
         async def capture_audio():
-            nonlocal audio_buffer, total_system_bytes, system_chunk_count
+            nonlocal audio_buffer, total_system_bytes, system_chunk_count, last_transcription_time, transcribed_buffer_size
             
             try:
                 async for audio_chunk in audio_capture_service.start_capture():
@@ -667,6 +763,9 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
                     if len(audio_buffer) > audio_buffer_max_size:
                         logger.warning(f"[Transcription] Audio buffer overflow detected ({len(audio_buffer)} bytes), truncating")
                         audio_buffer = audio_buffer[-audio_buffer_max_size:]
+                        # Adjust transcribed buffer size if we truncated
+                        if transcribed_buffer_size > len(audio_buffer):
+                            transcribed_buffer_size = max(0, len(audio_buffer) - 100000)  # Keep some margin
                     
                     # Accumulate audio chunks
                     audio_buffer.extend(audio_chunk)
@@ -678,14 +777,83 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
                         logger.info(f"[Audio Capture] 🎤 System audio capture started - Chunk #{system_chunk_count}: {len(audio_chunk)} bytes | Buffer: {len(audio_buffer)} bytes | Total: {total_system_bytes} bytes")
                     elif system_chunk_count % 10 == 0:
                         logger.info(f"[Audio Capture] 🎤 Chunk #{system_chunk_count}: {len(audio_chunk)} bytes | Buffer: {len(audio_buffer)} bytes | Total: {total_system_bytes} bytes")
+                    
+                    # Real-time transcription: transcribe periodically (every 8 seconds)
+                    current_time = time.time()
+                    # Increased threshold: need at least 100KB new data (was 50KB) to ensure we have enough audio for complete sentences
+                    if current_time - last_transcription_time >= transcription_interval and len(audio_buffer) > transcribed_buffer_size + 100000:  # At least 100KB new data
+                        try:
+                            # Get the new audio since last transcription
+                            new_audio = audio_buffer[transcribed_buffer_size:]
+                            if len(new_audio) > 20000:  # Minimum 20KB to transcribe (increased from 10KB for better quality)
+                                logger.info(f"[Transcription] 🔄 Real-time system audio transcription - New audio: {len(new_audio)} bytes | Total buffer: {len(audio_buffer)} bytes")
+                                
+                                # Transcribe the new audio
+                                transcript = await transcription_service.transcribe_audio_chunk(bytes(new_audio), language='en', audio_format='pcm')
+                                
+                                if transcript and transcript.strip():
+                                    timestamp = time.time()
+                                    
+                                    # Store transcript with timestamp
+                                    async with get_active_sessions_lock():
+                                        if session_id in active_sessions:
+                                            active_data = active_sessions[session_id]
+                                            active_data["audience_transcripts"].append((timestamp, transcript))
+                                            
+                                            # Merge all transcripts
+                                            user_transcripts = active_data.get("user_transcripts", [])
+                                            audience_transcripts = active_data.get("audience_transcripts", [])
+                                            merged_transcript = merge_transcripts_with_labels(user_transcripts, audience_transcripts)
+                                            
+                                            active_data["full_transcript"] = merged_transcript
+                                            
+                                            # Send real-time transcript to client
+                                            try:
+                                                message = {
+                                                    "type": "transcript",
+                                                    "speaker": "Audience",
+                                                    "text": transcript,
+                                                    "full_transcript": merged_transcript
+                                                }
+                                                await websocket.send_json(message)
+                                                logger.info(f"[Transcription] ✅ Sent real-time system audio transcript: {transcript[:50]}...")
+                                            except (WebSocketDisconnect, RuntimeError):
+                                                pass
+                                    
+                                    # Update transcription tracking
+                                    transcribed_buffer_size = len(audio_buffer)
+                                    last_transcription_time = current_time
+                                else:
+                                    logger.debug(f"[Transcription] Real-time system audio transcription returned empty (silence or no speech)")
+                        except Exception as e:
+                            logger.warning(f"[Transcription] Error in real-time system audio transcription: {e}", exc_info=True)
+                            # Don't break the loop, just log and continue
             except RuntimeError as e:
                 # RuntimeError from AudioCaptureService (e.g., no device found)
                 error_msg = str(e)
                 logger.error(f"[Transcription] System audio capture error: {error_msg}", exc_info=True)
+                
+                # Provide helpful error message
+                helpful_msg = error_msg
+                if "No system audio" in error_msg or "device" in error_msg.lower():
+                    helpful_msg = (
+                        f"{error_msg}\n\n"
+                        "To fix system audio capture:\n"
+                        "1. Install BlackHole: brew install blackhole-2ch\n"
+                        "2. OR set AUDIO_CAPTURE_METHOD=ffmpeg in .env\n"
+                        "3. Check system audio permissions in System Settings"
+                    )
+                elif "ffmpeg" in error_msg.lower():
+                    helpful_msg = (
+                        f"{error_msg}\n\n"
+                        "FFmpeg is required for system audio capture.\n"
+                        "Install with: brew install ffmpeg"
+                    )
+                
                 try:
                     await websocket.send_json({
                         "type": "error",
-                        "message": error_msg
+                        "message": helpful_msg
                     })
                 except:
                     pass
@@ -693,10 +861,21 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
                 # Other exceptions
                 error_msg = f"System audio capture error: {str(e)}"
                 logger.error(f"[Transcription] Error in system audio capture: {e}", exc_info=True)
+                
+                # Check if it's an FFmpeg issue
+                if "ffmpeg" in str(e).lower() or "FileNotFoundError" in str(type(e)):
+                    helpful_msg = (
+                        f"{error_msg}\n\n"
+                        "FFmpeg is required for system audio capture.\n"
+                        "Install with: brew install ffmpeg"
+                    )
+                else:
+                    helpful_msg = error_msg
+                
                 try:
                     await websocket.send_json({
                         "type": "error",
-                        "message": error_msg
+                        "message": helpful_msg
                     })
                 except:
                     pass
@@ -747,14 +926,19 @@ async def websocket_system_audio_transcription(websocket: WebSocket, session_id:
             except asyncio.CancelledError:
                 pass
         
-        # Process accumulated audio for final transcription
-        if audio_buffer and len(audio_buffer) > 1000:  # Minimum size check
+        # Process any remaining accumulated audio for final transcription
+        # Only transcribe the part we haven't transcribed yet
+        remaining_audio_size = len(audio_buffer) - transcribed_buffer_size
+        if remaining_audio_size > 5000:  # Minimum size check (increased from 1000 to ensure quality)
             try:
-                logger.info(f"[Transcription] Processing final accumulated system audio - Buffer: {len(audio_buffer)} bytes")
+                logger.info(f"[Transcription] Processing final accumulated system audio - Remaining: {remaining_audio_size} bytes | Total buffer: {len(audio_buffer)} bytes")
                 
-                # Transcribe the entire accumulated audio
-                logger.info(f"[Transcription] 📝 Starting final transcription of accumulated system audio")
-                transcript = await transcription_service.transcribe_audio_chunk(bytes(audio_buffer), language='en', audio_format='pcm')
+                # Get the remaining audio that hasn't been transcribed
+                remaining_audio = audio_buffer[transcribed_buffer_size:]
+                
+                # Transcribe the remaining audio
+                logger.info(f"[Transcription] 📝 Starting final transcription of remaining system audio")
+                transcript = await transcription_service.transcribe_audio_chunk(bytes(remaining_audio), language='en', audio_format='pcm')
                 
                 if transcript and transcript.strip():
                     timestamp = time.time()

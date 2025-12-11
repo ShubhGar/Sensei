@@ -8,9 +8,10 @@ from pydantic import ValidationError
 from datetime import datetime
 import logging
 
-from app.models.schemas import AIProcessingRequest, AIProcessingResponse, MOMResponse, FAQItem, EmailDraft, DecisionItem, ActionItem
+from app.models.schemas import AIProcessingRequest, AIProcessingResponse, MOMResponse, FAQItem, EmailDraft, DecisionItem, ActionItem, TodoItemCreate, TodoItemResponse
 from app.database import get_db, MeetingSession
 from app.services.ai_service import AIService
+from typing import List
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -250,3 +251,93 @@ async def summarize_transcript(
     except Exception as e:
         logger.error(f"[AI Processing] Unexpected error in summarize_transcript: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing transcript: {str(e)}")
+
+
+@router.post("/generate-todos/{session_id}", response_model=List[TodoItemResponse])
+async def generate_todos_from_transcript(
+    session_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate todos from transcript/MOM action items"""
+    try:
+        logger.info(f"[AI Processing] Generating todos from transcript for session: {session_id}")
+        
+        # Get meeting session
+        result = await db.execute(
+            select(MeetingSession).where(MeetingSession.id == session_id)
+        )
+        session = result.scalar_one_or_none()
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="Meeting session not found")
+        
+        # Get transcript and MOM
+        transcript = session.full_transcript or session.transcript or ""
+        mom = session.mom or {}
+        
+        if not transcript:
+            raise HTTPException(status_code=400, detail="No transcript available")
+        
+        # Extract action items from MOM if available, otherwise generate from transcript
+        action_items = mom.get("action_items", []) if isinstance(mom, dict) else []
+        
+        if not action_items:
+            # Generate action items from transcript using AI
+            logger.info(f"[AI Processing] No action items in MOM, generating from transcript...")
+            try:
+                mom_data = await ai_service.generate_mom(transcript=transcript, session_id=session_id)
+                action_items = mom_data.get("action_items", [])
+            except Exception as e:
+                logger.warning(f"[AI Processing] Error generating action items: {e}")
+                action_items = []
+        
+        # Create todos from action items
+        created_todos = []
+        for item in action_items:
+            if isinstance(item, dict):
+                # Normalize priority value to match schema pattern: low, medium, high, critical
+                priority_raw = item.get("priority", "medium")
+                if isinstance(priority_raw, str):
+                    priority_lower = priority_raw.lower().strip()
+                    # Map common variations to valid values
+                    priority_map = {
+                        "unspecified": "medium",
+                        "normal": "medium",
+                        "medium": "medium",
+                        "low": "low",
+                        "high": "high",
+                        "critical": "critical",
+                        "urgent": "high",
+                        "important": "high"
+                    }
+                    priority = priority_map.get(priority_lower, "medium")  # Default to medium if unknown
+                else:
+                    priority = "medium"
+                
+                todo_create = TodoItemCreate(
+                    title=item.get("task", "Untitled Task"),
+                    description=item.get("context", ""),
+                    priority=priority,
+                    source_type="meeting",
+                    source_id=session_id,
+                    source_data={
+                        "meeting_title": session.title,
+                        "meeting_date": session.started_at.isoformat() if session.started_at else None,
+                        "owner": item.get("owner", "TBD"),
+                        "deadline": item.get("deadline")
+                    }
+                )
+                
+                # Create todo using the todos API function
+                from app.api.todos import create_todo
+                created_todo = await create_todo(todo_create, db)
+                created_todos.append(created_todo)
+        
+        logger.info(f"[AI Processing] Successfully created {len(created_todos)} todos from session {session_id}")
+        return created_todos
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AI Processing] Error generating todos: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating todos: {str(e)}")

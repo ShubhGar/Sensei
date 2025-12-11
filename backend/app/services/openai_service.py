@@ -182,3 +182,4 @@ class OpenAIService:
                     raise Exception(f"OpenAI model not found: {error_msg}")
             raise Exception(f"OpenAI error: {error_msg}")
 
+

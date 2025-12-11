@@ -10,8 +10,6 @@ import {
   CircularProgress,
   Alert,
   Paper,
-  ToggleButton,
-  ToggleButtonGroup,
   FormControl,
   FormLabel,
   Grid,
@@ -22,16 +20,21 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions
+  DialogActions,
+  Select,
+  MenuItem,
+  InputLabel
 } from '@mui/material'
 import MicIcon from '@mui/icons-material/Mic'
 import SummarizeIcon from '@mui/icons-material/Summarize'
 import HistoryIcon from '@mui/icons-material/History'
 import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
-import { transcriptionAPI, aiAPI, exportAPI, emailAPI } from '../services/api'
+import { transcriptionAPI, aiAPI, exportAPI, emailAPI, todoAPI } from '../services/api'
 import SendIcon from '@mui/icons-material/Send'
 import EmailIcon from '@mui/icons-material/Email'
+import BugReportIcon from '@mui/icons-material/BugReport'
+import AssignmentIcon from '@mui/icons-material/Assignment'
 import { useTheme } from '../ThemeContext'
 
 const TranscriptionView = () => {
@@ -57,7 +60,14 @@ const TranscriptionView = () => {
   const [sendEmailDialog, setSendEmailDialog] = useState({ open: false })
   const [sendingEmail, setSendingEmail] = useState(false)
   const [sendEmailError, setSendEmailError] = useState(null)
-  const [audioSource, setAudioSource] = useState('user') // 'user', 'system', or 'both'
+  const [createJiraDialog, setCreateJiraDialog] = useState({ open: false })
+  const [creatingJira, setCreatingJira] = useState(false)
+  const [jiraError, setJiraError] = useState(null)
+  const [jiraProjectKey, setJiraProjectKey] = useState('')
+  const [jiraProjects, setJiraProjects] = useState([])
+  const [creatingTodos, setCreatingTodos] = useState(false)
+  const [todosError, setTodosError] = useState(null)
+  const [audioSource] = useState('both') // Always use both microphone and system audio
   const [voiceActivity, setVoiceActivity] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const saveTimeoutRef = useRef(null)
@@ -189,6 +199,49 @@ const TranscriptionView = () => {
     setLoading(true)
     setError(null)
     try {
+      // Clean up any existing recording resources first
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.stop()
+        } catch (e) {
+          console.warn('[Transcription] Error stopping existing MediaRecorder:', e)
+        }
+      }
+      if (wsRef.current) {
+        try {
+          wsRef.current.close()
+        } catch (e) {
+          console.warn('[Transcription] Error closing existing WebSocket:', e)
+        }
+        wsRef.current = null
+      }
+      if (wsSystemRef.current) {
+        try {
+          wsSystemRef.current.close()
+        } catch (e) {
+          console.warn('[Transcription] Error closing existing system WebSocket:', e)
+        }
+        wsSystemRef.current = null
+      }
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach(track => track.stop())
+        audioStreamRef.current = null
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        try {
+          audioContextRef.current.close()
+        } catch (e) {
+          console.warn('[Transcription] Error closing audio context:', e)
+        }
+        audioContextRef.current = null
+      }
+      analyserRef.current = null
+      setVoiceActivity(false)
+      
       // Clear previous session data to start a new meeting
       setFullTranscript('')
       setEditedTranscript('')
@@ -201,12 +254,13 @@ const TranscriptionView = () => {
       setRisks([])
       setIsPaused(false)
       isPausedRef.current = false
+      setIsRecording(false) // Ensure recording state is reset before starting
       
       // Start transcription session
       const response = await transcriptionAPI.startSession(title || 'Untitled Meeting')
       const newSessionId = response.data.id
       setSessionId(newSessionId)
-      setIsRecording(true)
+      // Don't set isRecording here - wait for WebSocket to open
       
       const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
       
@@ -294,7 +348,11 @@ const TranscriptionView = () => {
         ws.onclose = () => {
           console.log('WebSocket closed (User Microphone)')
           if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop()
+            try {
+              mediaRecorderRef.current.stop()
+            } catch (e) {
+              console.warn('[Transcription] Error stopping MediaRecorder on close:', e)
+            }
           }
           if (audioStreamRef.current) {
             audioStreamRef.current.getTracks().forEach(track => track.stop())
@@ -305,13 +363,20 @@ const TranscriptionView = () => {
             animationFrameRef.current = null
           }
           if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-            audioContextRef.current.close()
+            try {
+              audioContextRef.current.close()
+            } catch (e) {
+              console.warn('[Transcription] Error closing audio context on close:', e)
+            }
             audioContextRef.current = null
           }
           analyserRef.current = null
           setVoiceActivity(false)
+          // Only set isRecording to false if this is the only audio source
+          // If both user and system are active, don't stop recording yet
           if (audioSource === 'user') {
             setIsRecording(false)
+            console.log('[Transcription] Recording state set to false (user microphone only, WebSocket closed)')
           }
           // Try to fetch transcript from API if we don't have it yet
           if (sessionId && (!fullTranscript || fullTranscript.length === 0)) {
@@ -343,9 +408,13 @@ const TranscriptionView = () => {
       if (audioSource === 'system' || audioSource === 'both') {
         const wsSystemUrl = API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://') + `/api/transcribe/ws-system/${newSessionId}`
         const wsSystem = new WebSocket(wsSystemUrl)
+        wsSystemRef.current = wsSystem // Store WebSocket reference immediately
         
         wsSystem.onopen = () => {
           console.log('WebSocket connected (System Audio)')
+          // Ensure recording state is true when system audio WebSocket opens
+          setIsRecording(true)
+          console.log('[Transcription] Recording state set to true (System Audio WebSocket open)')
         }
         
         wsSystem.onmessage = (event) => {
@@ -390,12 +459,12 @@ const TranscriptionView = () => {
         
         wsSystem.onclose = () => {
           console.log('WebSocket closed (System Audio)')
+          // Only set isRecording to false if this is the only audio source
           if (audioSource === 'system') {
             setIsRecording(false)
+            console.log('[Transcription] Recording state set to false (system audio only, WebSocket closed)')
           }
         }
-        
-        wsSystemRef.current = wsSystem
       }
     } catch (err) {
       if (audioSource === 'user' || audioSource === 'both') {
@@ -418,60 +487,148 @@ const TranscriptionView = () => {
   const pauseTranscription = () => {
     if (!isRecording || isPaused) return
     
-    // Pause MediaRecorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.pause()
+    try {
+      // Pause MediaRecorder - handle different states
+      if (mediaRecorderRef.current) {
+        const state = mediaRecorderRef.current.state
+        if (state === 'recording') {
+          try {
+            mediaRecorderRef.current.pause()
+            console.log('[Transcription] MediaRecorder paused')
+          } catch (err) {
+            console.warn('[Transcription] Error pausing MediaRecorder:', err)
+            // If pause fails, try to stop and restart later
+          }
+        } else if (state === 'inactive') {
+          console.warn('[Transcription] MediaRecorder already inactive, cannot pause')
+        }
+      }
+      
+      // Pause voice activity detection
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      
+      // Send pause signal to WebSocket if connected
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ type: 'pause' }))
+        } catch (err) {
+          console.warn('[Transcription] Error sending pause signal:', err)
+        }
+      }
+      
+      isPausedRef.current = true
+      setVoiceActivity(false)
+      setIsPaused(true)
+      console.log('[Transcription] Transcription paused')
+    } catch (err) {
+      console.error('[Transcription] Error in pauseTranscription:', err)
+      setError('Failed to pause transcription: ' + err.message)
     }
-    
-    // Pause voice activity detection
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current)
-      animationFrameRef.current = null
-    }
-    
-    isPausedRef.current = true
-    setVoiceActivity(false)
-    setIsPaused(true)
   }
 
   const resumeTranscription = () => {
     if (!isRecording || !isPaused) return
     
-    // Resume MediaRecorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-      mediaRecorderRef.current.resume()
-    }
-    
-    isPausedRef.current = false
-    
-    // Resume voice activity detection if we have a stream
-    if (audioStreamRef.current && analyserRef.current) {
-      const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount)
-      const threshold = 30
-      
-      const detectVoice = () => {
-        if (!analyserRef.current || !isRecording || isPausedRef.current) return
-        
-        analyserRef.current.getByteFrequencyData(dataArray)
-        
-        let sum = 0
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i]
-        }
-        const average = sum / dataArray.length
-        
-        const isVoiceActive = average > threshold
-        setVoiceActivity(isVoiceActive)
-        
-        if (isRecording && !isPausedRef.current) {
-          animationFrameRef.current = requestAnimationFrame(detectVoice)
+    try {
+      // Resume MediaRecorder - handle different states
+      if (mediaRecorderRef.current) {
+        const state = mediaRecorderRef.current.state
+        if (state === 'paused') {
+          try {
+            mediaRecorderRef.current.resume()
+            console.log('[Transcription] MediaRecorder resumed')
+          } catch (err) {
+            console.warn('[Transcription] Error resuming MediaRecorder:', err)
+            // If resume fails, try to restart
+            if (audioStreamRef.current) {
+              try {
+                const options = { mimeType: 'audio/webm;codecs=opus' }
+                const newRecorder = new MediaRecorder(audioStreamRef.current, options)
+                newRecorder.ondataavailable = (event) => {
+                  if (event.data.size > 0 && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(event.data)
+                  }
+                }
+                newRecorder.start(1000)
+                mediaRecorderRef.current = newRecorder
+                console.log('[Transcription] MediaRecorder restarted after resume failure')
+              } catch (restartErr) {
+                console.error('[Transcription] Failed to restart MediaRecorder:', restartErr)
+                setError('Failed to resume transcription. Please stop and restart.')
+                return
+              }
+            }
+          }
+        } else if (state === 'inactive') {
+          // If inactive, restart the recorder
+          if (audioStreamRef.current) {
+            try {
+              const options = { mimeType: 'audio/webm;codecs=opus' }
+              const newRecorder = new MediaRecorder(audioStreamRef.current, options)
+              newRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0 && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(event.data)
+                }
+              }
+              newRecorder.start(1000)
+              mediaRecorderRef.current = newRecorder
+              console.log('[Transcription] MediaRecorder restarted (was inactive)')
+            } catch (restartErr) {
+              console.error('[Transcription] Failed to restart MediaRecorder:', restartErr)
+              setError('Failed to resume transcription. Please stop and restart.')
+              return
+            }
+          }
         }
       }
       
-      detectVoice()
+      // Send resume signal to WebSocket if connected
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ type: 'resume' }))
+        } catch (err) {
+          console.warn('[Transcription] Error sending resume signal:', err)
+        }
+      }
+      
+      isPausedRef.current = false
+      
+      // Resume voice activity detection if we have a stream
+      if (audioStreamRef.current && analyserRef.current) {
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount)
+        const threshold = 30
+        
+        const detectVoice = () => {
+          if (!analyserRef.current || !isRecording || isPausedRef.current) return
+          
+          analyserRef.current.getByteFrequencyData(dataArray)
+          
+          let sum = 0
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i]
+          }
+          const average = sum / dataArray.length
+          
+          const isVoiceActive = average > threshold
+          setVoiceActivity(isVoiceActive)
+          
+          if (isRecording && !isPausedRef.current) {
+            animationFrameRef.current = requestAnimationFrame(detectVoice)
+          }
+        }
+        
+        animationFrameRef.current = requestAnimationFrame(detectVoice)
+      }
+      
+      setIsPaused(false)
+      console.log('[Transcription] Transcription resumed')
+    } catch (err) {
+      console.error('[Transcription] Error in resumeTranscription:', err)
+      setError('Failed to resume transcription: ' + err.message)
     }
-    
-    setIsPaused(false)
   }
 
   const stopTranscription = async () => {
@@ -541,11 +698,17 @@ const TranscriptionView = () => {
       
       // Stop the session
       await transcriptionAPI.stopSession(sessionId)
+      
+      // Ensure all recording state is cleared
       setIsRecording(false)
       setIsPaused(false)
+      isPausedRef.current = false
+      setVoiceActivity(false)
+      console.log('[Transcription] Recording stopped, all state cleared')
       
       // Fetch the final transcript from the API in case WebSocket message was missed
       // Try multiple times with increasing delays
+      let finalTranscriptFetched = false
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)))
@@ -558,6 +721,7 @@ const TranscriptionView = () => {
                 setEditedTranscript(finalTranscript)
               }
               console.log('[Transcription] Fetched final transcript from API (attempt ' + (attempt + 1) + '):', finalTranscript.substring(0, 100))
+              finalTranscriptFetched = true
               break // Success, no need to retry
             }
           }
@@ -568,6 +732,46 @@ const TranscriptionView = () => {
             console.warn('[Transcription] All attempts to fetch transcript failed, transcript might already be in state')
           }
         }
+      }
+      
+      // Automatically generate insights after stopping recording
+      // Use the transcript we have (either from state or fetched)
+      const transcriptToUse = fullTranscript || editedTranscript || transcript
+      if (transcriptToUse && transcriptToUse.trim() && transcriptToUse.length > 10) {
+        console.log('[Transcription] Auto-generating insights after recording stopped...')
+        try {
+          // Wait a bit more to ensure backend has processed everything
+          await new Promise(resolve => setTimeout(resolve, 2000))
+          
+          // Save the edited transcript first if it's different from the stored one
+          if (editedTranscript && editedTranscript !== fullTranscript) {
+            await saveTranscript(editedTranscript)
+            await new Promise(resolve => setTimeout(resolve, 500))
+          }
+          
+          console.log(`[Auto-Generate Insights] Calling API for session: ${sessionId}`)
+          const response = await aiAPI.processTranscript(sessionId, true, true)
+          console.log(`[Auto-Generate Insights] Response received:`, response.data)
+          
+          if (response && response.data) {
+            setMom(response.data.mom)
+            setFaqs(response.data.faqs || [])
+            setEmailDraft(response.data.email_draft)
+            setEditedEmailDraft(response.data.email_draft)
+            setRisks(response.data.risks || [])
+            console.log('[Auto-Generate Insights] Successfully generated insights')
+          } else {
+            console.warn('[Auto-Generate Insights] Invalid response from server')
+          }
+        } catch (err) {
+          console.error('[Auto-Generate Insights] Error:', err)
+          // Don't show error to user - insights generation is automatic and non-critical
+          // The user can still manually view the transcript
+          const errorMessage = err.response?.data?.detail || err.response?.data?.message || err.message || 'Unknown error'
+          console.warn(`[Auto-Generate Insights] Failed to auto-generate insights: ${errorMessage}`)
+        }
+      } else {
+        console.warn('[Auto-Generate Insights] Skipping - transcript too short or empty')
       }
     } catch (err) {
       setError('Failed to stop transcription: ' + err.message)
@@ -611,26 +815,55 @@ const TranscriptionView = () => {
   }
 
   const generateInsights = async () => {
-    if (!sessionId) return
+    if (!sessionId) {
+      setError('No session ID available. Please start a recording first.')
+      return
+    }
     
     setLoading(true)
+    setError(null) // Clear previous errors
     try {
       // Save the edited transcript first if it's different from the stored one
       const transcriptToUse = editedTranscript || fullTranscript || transcript
+      if (!transcriptToUse || !transcriptToUse.trim()) {
+        setError('No transcript available. Please ensure the recording was completed and has transcript content.')
+        setLoading(false)
+        return
+      }
+      
       if (editedTranscript && editedTranscript !== fullTranscript) {
         await saveTranscript(editedTranscript)
         // Wait a bit for the save to complete
         await new Promise(resolve => setTimeout(resolve, 500))
       }
       
+      console.log(`[Generate Insights] Calling API for session: ${sessionId}`)
       const response = await aiAPI.processTranscript(sessionId, true, true)
-      setMom(response.data.mom)
-      setFaqs(response.data.faqs || [])
-      setEmailDraft(response.data.email_draft)
-      setEditedEmailDraft(response.data.email_draft)
-      setRisks(response.data.risks || [])
+      console.log(`[Generate Insights] Response received:`, response.data)
+      
+      if (response && response.data) {
+        setMom(response.data.mom)
+        setFaqs(response.data.faqs || [])
+        setEmailDraft(response.data.email_draft)
+        setEditedEmailDraft(response.data.email_draft)
+        setRisks(response.data.risks || [])
+      } else {
+        setError('Invalid response from server. Please check backend logs.')
+      }
     } catch (err) {
-      setError('Failed to generate insights: ' + err.message)
+      console.error('[Generate Insights] Error:', err)
+      const errorMessage = err.response?.data?.detail || err.response?.data?.message || err.message || 'Unknown error'
+      const statusCode = err.response?.status
+      
+      if (statusCode === 404) {
+        setError(`Session not found (404). The session may have expired or been deleted. Session ID: ${sessionId}`)
+      } else if (statusCode === 400) {
+        setError(`Bad request (400): ${errorMessage}. Please check that the transcript is not empty.`)
+      } else if (statusCode === 500) {
+        setError(`Server error (500): ${errorMessage}. Please check backend logs for details.`)
+      } else {
+        setError(`Failed to generate insights: ${errorMessage}${statusCode ? ` (Status: ${statusCode})` : ''}`)
+      }
     } finally {
       setLoading(false)
     }
@@ -904,29 +1137,6 @@ const TranscriptionView = () => {
             disabled={isRecording}
             helperText="Title will be automatically generated from transcript content if left empty"
           />
-          <FormControl component="fieldset" sx={{ mb: 2 }} disabled={isRecording}>
-            <FormLabel component="legend">Audio Source</FormLabel>
-            <ToggleButtonGroup
-              value={audioSource}
-              exclusive
-              onChange={(e, newValue) => {
-                if (newValue !== null) {
-                  setAudioSource(newValue)
-                }
-              }}
-              aria-label="audio source"
-            >
-              <ToggleButton value="user" aria-label="user microphone">
-                User Microphone
-              </ToggleButton>
-              <ToggleButton value="system" aria-label="system audio">
-                System Audio
-              </ToggleButton>
-              <ToggleButton value="both" aria-label="both audio sources">
-                Both
-              </ToggleButton>
-            </ToggleButtonGroup>
-          </FormControl>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
             {!isRecording ? (
               <Button
@@ -977,6 +1187,55 @@ const TranscriptionView = () => {
                 >
                   Stop Recording
                 </Button>
+                {/* Record Indicator - Only show when actually recording */}
+                {isRecording && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    {!isPaused ? (
+                      <>
+                        <Box
+                          sx={{
+                            width: 20,
+                            height: 20,
+                            borderRadius: '50%',
+                            backgroundColor: '#f44336',
+                            boxShadow: `0 0 12px #f44336, 0 0 24px rgba(244, 67, 54, 0.4), 0 0 36px rgba(244, 67, 54, 0.2)`,
+                            transition: 'all 0.3s ease-in-out',
+                            animation: 'pulseRecording 1.2s ease-in-out infinite',
+                            '@keyframes pulseRecording': {
+                              '0%, 100%': {
+                                transform: 'scale(1)',
+                                opacity: 1,
+                              },
+                              '50%': {
+                                transform: 'scale(1.3)',
+                                opacity: 0.8,
+                              },
+                            },
+                          }}
+                        />
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                          Recording
+                        </Typography>
+                      </>
+                    ) : (
+                      <>
+                        <Box
+                          sx={{
+                            width: 20,
+                            height: 20,
+                            borderRadius: '50%',
+                            backgroundColor: '#ff9800',
+                            boxShadow: `0 0 8px rgba(255, 152, 0, 0.5)`,
+                          }}
+                        />
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                          Paused
+                        </Typography>
+                      </>
+                    )}
+                  </Box>
+                )}
+                {/* Voice Activity Indicator - Only for user microphone */}
                 {(audioSource === 'user' || audioSource === 'both') && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                     {!isPaused ? (
@@ -1077,13 +1336,114 @@ const TranscriptionView = () => {
             )}
             {sessionId && !isRecording && (
               <>
-                <Button
-                  variant="outlined"
-                    onClick={generateInsights}
-                    disabled={loading}
-                  >
-                  Generate Insights
-                </Button>
+                {/* Quick Actions - Available when transcript exists */}
+                {(fullTranscript || editedTranscript) && (
+                  <>
+                    <Button
+                      variant="outlined"
+                      color="primary"
+                      startIcon={<AssignmentIcon />}
+                      onClick={async () => {
+                        setCreatingTodos(true)
+                        setTodosError(null)
+                        try {
+                          const response = await aiAPI.generateTodosFromTranscript(sessionId)
+                          setTodosError(null)
+                          alert(`Successfully created ${response.data.length} todo(s) from transcript!`)
+                        } catch (err) {
+                          setTodosError(err.response?.data?.detail || err.message || 'Failed to create todos')
+                          alert(`Error: ${err.response?.data?.detail || err.message || 'Failed to create todos'}`)
+                        } finally {
+                          setCreatingTodos(false)
+                        }
+                      }}
+                      disabled={creatingTodos || loading || !(fullTranscript || editedTranscript)}
+                    >
+                      {creatingTodos ? 'Creating...' : 'Create Todos'}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="secondary"
+                      startIcon={<BugReportIcon />}
+                      onClick={async () => {
+                        setJiraError(null)
+                        setJiraProjects([])
+                        try {
+                          const response = await aiAPI.getJiraProjects()
+                          // Handle both array response and object with projects property
+                          const projects = Array.isArray(response.data) ? response.data : (response.data?.projects || [])
+                          if (projects.length === 0) {
+                            setJiraError('No JIRA projects found. Please check your JIRA permissions.')
+                          }
+                          setJiraProjects(projects)
+                          setCreateJiraDialog({ open: true })
+                        } catch (err) {
+                          const errorMsg = err.response?.data?.detail || err.message || 'Failed to load JIRA projects'
+                          setJiraError(`Failed to load JIRA projects: ${errorMsg}. Please check your JIRA configuration in .env file.`)
+                          setCreateJiraDialog({ open: true })
+                        }
+                      }}
+                      disabled={loading || !(fullTranscript || editedTranscript)}
+                    >
+                      Create Jira Tickets
+                    </Button>
+                  </>
+                )}
+                {/* Legacy buttons - Only show when MOM has action items (for backward compatibility) */}
+                {mom && mom.action_items && mom.action_items.length > 0 && (
+                  <>
+                    <Button
+                      variant="outlined"
+                      color="primary"
+                      startIcon={<AssignmentIcon />}
+                      onClick={async () => {
+                        setCreatingTodos(true)
+                        setTodosError(null)
+                        try {
+                          const response = await aiAPI.generateTodosFromTranscript(sessionId)
+                          setTodosError(null)
+                          alert(`Successfully created ${response.data.length} todo(s) from action items!`)
+                        } catch (err) {
+                          setTodosError(err.response?.data?.detail || err.message || 'Failed to create todos')
+                          alert(`Error: ${err.response?.data?.detail || err.message || 'Failed to create todos'}`)
+                        } finally {
+                          setCreatingTodos(false)
+                        }
+                      }}
+                      disabled={creatingTodos || loading}
+                      sx={{ display: 'none' }} // Hide duplicate button
+                    >
+                      {creatingTodos ? 'Creating...' : 'Create Todos (from MOM)'}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="secondary"
+                      startIcon={<BugReportIcon />}
+                      onClick={async () => {
+                        setJiraError(null)
+                        setJiraProjects([])
+                        try {
+                          const response = await aiAPI.getJiraProjects()
+                          // Handle both array response and object with projects property
+                          const projects = Array.isArray(response.data) ? response.data : (response.data?.projects || [])
+                          if (projects.length === 0) {
+                            setJiraError('No JIRA projects found. Please check your JIRA permissions.')
+                          }
+                          setJiraProjects(projects)
+                          setCreateJiraDialog({ open: true })
+                        } catch (err) {
+                          const errorMsg = err.response?.data?.detail || err.message || 'Failed to load JIRA projects'
+                          setJiraError(`Failed to load JIRA projects: ${errorMsg}. Please check your JIRA configuration in .env file.`)
+                          setCreateJiraDialog({ open: true })
+                        }
+                      }}
+                      disabled={loading}
+                      sx={{ display: 'none' }} // Hide duplicate button
+                    >
+                      Create Jira Tickets (from MOM)
+                    </Button>
+                  </>
+                )}
                 <Button
                   variant="outlined"
                     onClick={() => exportDocument('pdf')}
@@ -1458,6 +1818,117 @@ const TranscriptionView = () => {
           </CardContent>
         </Card>
       )}
+
+      {/* Create Jira Tickets Dialog */}
+      <Dialog
+        open={createJiraDialog.open}
+        onClose={() => {
+          setCreateJiraDialog({ open: false })
+          setJiraError(null)
+          setJiraProjectKey('')
+        }}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            background: getCardBackground(),
+          }
+        }}
+      >
+        <DialogTitle
+          sx={{
+            bgcolor: 'secondary.main',
+            color: 'white',
+            fontWeight: 600,
+            background: 'linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%)',
+          }}
+        >
+          Create JIRA Tickets from Action Items
+        </DialogTitle>
+        <DialogContent sx={{ mt: 2 }}>
+          {jiraError && (
+            <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+              {jiraError}
+            </Alert>
+          )}
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Create JIRA tickets from the {mom?.action_items?.length || 0} action item(s) in this meeting.
+          </Typography>
+          <FormControl fullWidth sx={{ mb: 2 }}>
+            <InputLabel>JIRA Project Key</InputLabel>
+            <Select
+              value={jiraProjectKey}
+              onChange={(e) => setJiraProjectKey(e.target.value)}
+              label="JIRA Project Key"
+            >
+              <MenuItem value="">Select a project...</MenuItem>
+              {jiraProjects.map((project) => (
+                <MenuItem key={project.key} value={project.key}>
+                  {project.key} - {project.name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          {mom?.action_items && mom.action_items.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Action Items to Create:
+              </Typography>
+              {mom.action_items.map((item, index) => (
+                <Box key={index} sx={{ mb: 1, p: 1, bgcolor: 'background.default', borderRadius: 1 }}>
+                  <Typography variant="body2">
+                    <strong>{item.task || 'Untitled Task'}</strong>
+                  </Typography>
+                  {item.owner && (
+                    <Typography variant="caption" color="text.secondary">
+                      Owner: {item.owner}
+                    </Typography>
+                  )}
+                </Box>
+              ))}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button
+            onClick={() => {
+              setCreateJiraDialog({ open: false })
+              setJiraError(null)
+              setJiraProjectKey('')
+            }}
+            disabled={creatingJira}
+            variant="outlined"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!jiraProjectKey.trim()) {
+                setJiraError('Please select a JIRA project')
+                return
+              }
+              setCreatingJira(true)
+              setJiraError(null)
+              try {
+                const response = await aiAPI.generateJiraIssuesFromTranscript(sessionId, jiraProjectKey.trim(), 'Task')
+                setCreateJiraDialog({ open: false })
+                setJiraProjectKey('')
+                alert(`Successfully created ${response.data.created_count} JIRA ticket(s)!`)
+              } catch (err) {
+                setJiraError(err.response?.data?.detail || err.message || 'Failed to create JIRA tickets')
+              } finally {
+                setCreatingJira(false)
+              }
+            }}
+            disabled={creatingJira || !jiraProjectKey.trim()}
+            variant="contained"
+            color="secondary"
+          >
+            {creatingJira ? 'Creating...' : 'Create Tickets'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Send Email Dialog */}
       <Dialog

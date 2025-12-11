@@ -113,13 +113,31 @@ class TeamsIntegration:
         logger.debug(f"[Teams] Using token: {token_preview}")
         
         try:
+            # For personal accounts (Teams Free/Skype), the /me/chats endpoint works the same way
+            # Microsoft Graph API supports both work/school accounts and personal accounts
             url = "https://graph.microsoft.com/v1.0/me/chats"
             params = {"$top": max_results}
             
             # Ensure token is properly formatted
             auth_header = f"Bearer {token_clean}"
             
+            # First, check if this is a personal account by getting user info
             async with httpx.AsyncClient() as client:
+                # Get user info to determine account type
+                try:
+                    user_response = await client.get(
+                        "https://graph.microsoft.com/v1.0/me",
+                        headers={"Authorization": auth_header},
+                        timeout=5.0
+                    )
+                    if user_response.status_code == 200:
+                        user_data = user_response.json()
+                        account_type = "personal" if "@outlook.com" in user_data.get("mail", "") or "@hotmail.com" in user_data.get("mail", "") or "@live.com" in user_data.get("mail", "") or "@gmail.com" in user_data.get("mail", "") else "work/school"
+                        logger.info(f"[Teams] Account type detected: {account_type} ({user_data.get('mail', 'N/A')})")
+                except Exception as e:
+                    logger.debug(f"[Teams] Could not determine account type: {e}")
+                
+                # Now try to get chats (works for both personal and work accounts)
                 response = await client.get(
                     url,
                     headers={"Authorization": auth_header},
@@ -146,9 +164,15 @@ class TeamsIntegration:
                         if "No authorization information" in error_message or "authorization" in error_message.lower():
                             logger.warning(
                                 f"[Teams] Authentication token issue (403). The token may be invalid, expired, or not properly formatted. "
-                                f"Please re-authenticate with Chat.Read or Chat.ReadWrite scopes. Error: {error_code} - {error_message}"
+                                f"Please re-authenticate with Chat.Read or Chat.ReadWrite scopes. "
+                                f"For personal accounts (Teams Free/Skype), ensure you've consented to Chat.Read permissions. "
+                                f"Error: {error_code} - {error_message}"
                             )
-                            error_msg = "Authentication token is invalid or expired, or missing Chat.Read permissions. Please re-authenticate with Microsoft and ensure Chat.Read or Chat.ReadWrite scopes are granted."
+                            error_msg = (
+                                "Authentication token is invalid or expired, or missing Chat.Read permissions. "
+                                "For personal Microsoft accounts (Teams Free/Skype), please re-authenticate and ensure Chat.Read or Chat.ReadWrite scopes are granted. "
+                                "In Graph Explorer, click 'Modify permissions', select Chat.Read, and click 'Consent'."
+                            )
                             error_type = "authentication"
                         elif "Chat.Read" in error_message or "Chat.ReadBasic" in error_message or "Chat.ReadWrite" in error_message:
                             # Mark that Chat permissions are missing to prevent future API calls

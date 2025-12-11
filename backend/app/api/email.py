@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List
 import logging
 import time
+import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import EmailSummary, AutoReplySuggestion, TodoItemCreate, TodoItemResponse, SendEmailRequest, SendEmailResponse
@@ -44,27 +45,73 @@ async def get_inbox(
         
         emails = await email_integration.get_outlook_inbox(max_results, unread_only)
         
-        # Enhance emails with sentiment and priority scoring if requested
-        if include_sentiment or include_priority_score:
-            for email in emails[:20]:  # Limit to 20 for performance
-                subject = email.get("subject", "")
-                body = email.get("body", "") or email.get("body_preview", "")
-                sender = email.get("sender", "")
-                received_at = email.get("received_at")
-                
-                if include_sentiment:
-                    try:
-                        sentiment = await ai_service.analyze_email_sentiment(body, subject)
-                        email["sentiment"] = sentiment
-                    except Exception as e:
-                        logger.warning(f"[Email] Error analyzing sentiment for email {email.get('id')}: {e}")
-                
-                if include_priority_score:
-                    try:
-                        priority = await ai_service.score_email_priority(body, subject, sender, received_at)
-                        email["priority_score"] = priority
-                    except Exception as e:
-                        logger.warning(f"[Email] Error scoring priority for email {email.get('id')}: {e}")
+        # Always enhance emails with priority scoring and sentiment for criticality/urgency sorting
+        # Process in parallel with timeout to avoid blocking
+        
+        async def score_email_priority_with_timeout(email, timeout=3.0):
+            """Score email priority with timeout"""
+            subject = email.get("subject", "")
+            body = email.get("body", "") or email.get("body_preview", "")
+            sender = email.get("sender", "")
+            received_at = email.get("received_at")
+            
+            try:
+                priority = await asyncio.wait_for(
+                    ai_service.score_email_priority(body, subject, sender, received_at),
+                    timeout=timeout
+                )
+                email["priority_score"] = priority
+                # Set default urgency and criticality if not provided
+                if "urgency_score" not in priority:
+                    priority["urgency_score"] = priority.get("priority_score", 50)
+                if "criticality_score" not in priority:
+                    priority["criticality_score"] = priority.get("priority_score", 50)
+            except asyncio.TimeoutError:
+                logger.warning(f"[Email] Priority scoring timeout for email {email.get('id')}")
+                email["priority_score"] = {
+                    "priority_score": 50,
+                    "priority_level": "medium",
+                    "urgency_score": 50,
+                    "criticality_score": 50,
+                    "waiting_for_us": False,
+                    "blocked_on_us": False,
+                    "factors": []
+                }
+            except Exception as e:
+                logger.warning(f"[Email] Error scoring priority for email {email.get('id')}: {e}")
+                email["priority_score"] = {
+                    "priority_score": 50,
+                    "priority_level": "medium",
+                    "urgency_score": 50,
+                    "criticality_score": 50,
+                    "waiting_for_us": False,
+                    "blocked_on_us": False,
+                    "factors": []
+                }
+        
+        async def analyze_sentiment_with_timeout(email, timeout=3.0):
+            """Analyze email sentiment with timeout"""
+            if not include_sentiment:
+                return
+            subject = email.get("subject", "")
+            body = email.get("body", "") or email.get("body_preview", "")
+            try:
+                sentiment = await asyncio.wait_for(
+                    ai_service.analyze_email_sentiment(body, subject),
+                    timeout=timeout
+                )
+                email["sentiment"] = sentiment
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"[Email] Error analyzing sentiment for email {email.get('id')}: {e}")
+        
+        # Process emails in parallel batches (limit to 20 for performance)
+        emails_to_score = emails[:20]
+        if emails_to_score:
+            # Score priority in parallel
+            await asyncio.gather(*[score_email_priority_with_timeout(email) for email in emails_to_score], return_exceptions=True)
+            # Analyze sentiment in parallel if requested
+            if include_sentiment:
+                await asyncio.gather(*[analyze_sentiment_with_timeout(email) for email in emails_to_score], return_exceptions=True)
         
         summary = await email_integration.analyze_inbox(emails, ai_service)
         

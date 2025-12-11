@@ -111,9 +111,39 @@ const EmailView = () => {
     setLoading(true)
     setError(null)
     try {
-      const response = await emailAPI.getInbox(50, false, includeSentiment, includePriorityScore)
+      // Always request priority scoring for sorting (even if UI toggle is off)
+      const response = await emailAPI.getInbox(50, false, includeSentiment, true)
+      const emailsList = response.data.emails || []
+      
+      // Sort emails by criticality and urgency (highest first)
+      const sortedEmails = [...emailsList].sort((a, b) => {
+        // First, prioritize "blocked on us" and "waiting for us"
+        const aBlocked = a.priority_score?.blocked_on_us ? 1000 : 0
+        const bBlocked = b.priority_score?.blocked_on_us ? 1000 : 0
+        const aWaiting = a.priority_score?.waiting_for_us ? 500 : 0
+        const bWaiting = b.priority_score?.waiting_for_us ? 500 : 0
+        
+        // Then by criticality score
+        const aCriticality = a.priority_score?.criticality_score || a.priority_score?.priority_score || 0
+        const bCriticality = b.priority_score?.criticality_score || b.priority_score?.priority_score || 0
+        
+        // Then by urgency score
+        const aUrgency = a.priority_score?.urgency_score || a.priority_score?.priority_score || 0
+        const bUrgency = b.priority_score?.urgency_score || b.priority_score?.priority_score || 0
+        
+        // Then by priority score
+        const aPriority = a.priority_score?.priority_score || 0
+        const bPriority = b.priority_score?.priority_score || 0
+        
+        // Calculate total score
+        const aTotal = aBlocked + aWaiting + aCriticality + aUrgency + aPriority
+        const bTotal = bBlocked + bWaiting + bCriticality + bUrgency + bPriority
+        
+        return bTotal - aTotal // Descending order (highest first)
+      })
+      
       setSummary(response.data)
-      setEmails(response.data.emails || [])
+      setEmails(sortedEmails)
     } catch (err) {
       setError('Failed to load inbox: ' + err.message)
     } finally {
@@ -670,11 +700,17 @@ const EmailView = () => {
                             : '0 6px 24px rgba(0,0,0,0.15)',
                           transform: 'translateY(-2px)',
                         },
-                        borderLeft: email.is_urgent || email.importance === 'high' ? '4px solid' : 'none',
-                        borderLeftColor: email.is_urgent 
+                        borderLeft: (email.priority_score?.blocked_on_us || email.priority_score?.waiting_for_us || email.is_urgent || email.importance === 'high' || email.priority_score?.priority_score >= 80) ? '4px solid' : 'none',
+                        borderLeftColor: email.priority_score?.blocked_on_us 
+                          ? 'error.dark' 
+                          : email.priority_score?.waiting_for_us
+                          ? 'warning.dark'
+                          : email.is_urgent 
                           ? 'error.main' 
                           : email.importance === 'high'
                           ? 'warning.main'
+                          : email.priority_score?.priority_score >= 80
+                          ? 'error.main'
                           : 'transparent',
                         cursor: 'pointer',
                       }}
@@ -686,10 +722,16 @@ const EmailView = () => {
                           {/* Avatar */}
                           <Avatar
                             sx={{
-                              bgcolor: email.is_urgent 
+                              bgcolor: email.priority_score?.blocked_on_us
+                                ? 'error.dark'
+                                : email.priority_score?.waiting_for_us
+                                ? 'warning.dark'
+                                : email.is_urgent 
                                 ? 'error.main' 
                                 : email.importance === 'high'
                                 ? 'warning.main'
+                                : email.priority_score?.priority_score >= 80
+                                ? 'error.main'
                                 : 'primary.main',
                               width: 48,
                               height: 48,
