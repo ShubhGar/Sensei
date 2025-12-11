@@ -2,6 +2,8 @@
 Email integration for Outlook
 """
 import os
+import re
+import html
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
@@ -13,6 +15,80 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Import the token getter - avoid circular import by importing at function level
+
+
+def clean_html(html_content: str) -> str:
+    """Remove HTML tags and decode HTML entities from email content"""
+    if not html_content:
+        return ""
+    
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', '', html_content)
+    
+    # Decode HTML entities using Python's built-in html.unescape
+    try:
+        text = html.unescape(text)
+    except Exception:
+        # Fallback to manual decoding if html.unescape fails
+        html_entities = {
+            '&nbsp;': ' ',
+            '&amp;': '&',
+            '&lt;': '<',
+            '&gt;': '>',
+            '&quot;': '"',
+            '&#39;': "'",
+            '&apos;': "'",
+        }
+        for entity, char in html_entities.items():
+            text = text.replace(entity, char)
+    
+    # Clean up whitespace (preserve line breaks for readability)
+    # First, normalize line breaks
+    text = re.sub(r'\r\n|\r', '\n', text)
+    # Collapse multiple spaces but preserve line breaks
+    text = re.sub(r'[ \t]+', ' ', text)
+    # Collapse multiple line breaks to max 2 (paragraph breaks)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+    
+    return text
+
+
+def extract_priority_from_text(text: str) -> Optional[str]:
+    """Extract priority from email subject or body text"""
+    if not text:
+        return None
+    
+    text_lower = text.lower()
+    
+    # Look for priority patterns like "critical Priority (1)", "medium Priority (2)", etc.
+    # Check for explicit priority markers first (most reliable)
+    if re.search(r'\bcritical\s+priority', text_lower) or re.search(r'priority\s*\(1\)', text_lower):
+        return "high"  # Map to Microsoft's "high" importance
+    elif re.search(r'\bmedium\s+priority', text_lower) or re.search(r'priority\s*\(2\)', text_lower):
+        return "normal"
+    elif re.search(r'\blow\s+priority', text_lower) or re.search(r'priority\s*\(3\)', text_lower):
+        return "low"
+    
+    # Check for priority in subject line patterns (e.g., "critical Priority (1)" at start)
+    # This handles cases where priority appears in the subject
+    priority_match = re.search(r'^(critical|high|medium|low)\s+priority', text_lower)
+    if priority_match:
+        priority_word = priority_match.group(1)
+        if priority_word in ['critical', 'high']:
+            return "high"
+        elif priority_word == 'medium':
+            return "normal"
+        elif priority_word == 'low':
+            return "low"
+    
+    # Also check for standalone priority keywords in context
+    if re.search(r'\b(critical|urgent|asap|immediate)\s+priority', text_lower):
+        return "high"
+    elif re.search(r'\b(low|minor|trivial)\s+priority', text_lower):
+        return "low"
+    
+    return None
 
 
 class EmailIntegration:
@@ -84,17 +160,33 @@ class EmailIntegration:
                 for msg in data.get("value", []):
                     from_info = msg.get("from", {}).get("emailAddress", {})
                     body_content = msg.get("body", {})
+                    subject = msg.get("subject", "")
+                    raw_body = body_content.get("content", "") or msg.get("bodyPreview", "")
+                    raw_preview = msg.get("bodyPreview", "")
+                    
+                    # Clean HTML from body and preview
+                    clean_body = clean_html(raw_body)
+                    clean_preview = clean_html(raw_preview) if raw_preview else clean_body[:500]
+                    
+                    # Get importance from Microsoft API
+                    importance = msg.get("importance", "normal")
+                    
+                    # Try to extract priority from subject/body if importance is normal
+                    if importance == "normal":
+                        extracted_priority = extract_priority_from_text(subject + " " + clean_body)
+                        if extracted_priority:
+                            importance = extracted_priority
                     
                     emails.append({
                         "id": msg.get("id"),
-                        "subject": msg.get("subject", ""),
-                        "body": body_content.get("content", "") or msg.get("bodyPreview", ""),
-                        "body_preview": msg.get("bodyPreview", ""),
+                        "subject": subject,
+                        "body": clean_body,
+                        "body_preview": clean_preview,
                         "sender": from_info.get("name", ""),
                         "sender_email": from_info.get("address", ""),
                         "received_at": msg.get("receivedDateTime"),
                         "is_read": msg.get("isRead", False),
-                        "importance": msg.get("importance", "normal"),
+                        "importance": importance,
                         "has_attachments": msg.get("hasAttachments", False)
                     })
                 
@@ -131,13 +223,8 @@ class EmailIntegration:
             if needs_approval:
                 email["needs_approval"] = True
                 pending_approvals.append(email)
-            
-            # Generate summaries for unread emails
-            if not email.get("is_read", True) and ai_service:
-                email_content = f"{email.get('subject', '')} {email.get('body_preview', '')}"
-                email["summary"] = await ai_service.summarize_email(email_content)
         
-        # Generate mailbox summary using AI
+        # Generate mailbox summary using AI (but not individual email summaries)
         mailbox_summary = None
         if ai_service:
             try:

@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Box,
   TextField,
-  Paper,
   List,
   ListItem,
   ListItemText,
@@ -14,8 +13,9 @@ import {
   Divider,
   InputAdornment,
   IconButton,
-  Popper,
-  ClickAwayListener
+  Dialog,
+  DialogTitle,
+  DialogContent
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import CloseIcon from '@mui/icons-material/Close'
@@ -29,22 +29,14 @@ const SearchBar = () => {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
-  const [open, setOpen] = useState(false)
-  const [anchorEl, setAnchorEl] = useState(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const navigate = useNavigate()
   const searchInputRef = useRef(null)
   const debounceTimer = useRef(null)
 
-  useEffect(() => {
-    if (searchInputRef.current && !anchorEl) {
-      setAnchorEl(searchInputRef.current)
-    }
-  }, [anchorEl])
-
   const handleSearch = async (searchQuery) => {
     if (!searchQuery || searchQuery.trim().length < 1) {
       setResults([])
-      setOpen(false)
       return
     }
 
@@ -52,7 +44,6 @@ const SearchBar = () => {
     try {
       const response = await searchAPI.search(searchQuery, 20)
       setResults(response.data.results || [])
-      setOpen(true)
     } catch (error) {
       console.error('Search error:', error)
       setResults([])
@@ -77,9 +68,19 @@ const SearchBar = () => {
   }
 
   const handleClose = () => {
-    setOpen(false)
+    setDialogOpen(false)
     setQuery('')
     setResults([])
+  }
+
+  const handleOpen = () => {
+    setDialogOpen(true)
+    // Focus the input when dialog opens
+    setTimeout(() => {
+      if (searchInputRef.current) {
+        searchInputRef.current.focus()
+      }
+    }, 100)
   }
 
   const handleResultClick = (result) => {
@@ -142,81 +143,104 @@ const SearchBar = () => {
   }
 
   return (
-    <ClickAwayListener onClickAway={handleClose}>
-      <Box sx={{ position: 'relative', width: { xs: '100%', sm: '300px', md: '400px' }, maxWidth: '100%' }}>
-        <TextField
-          inputRef={searchInputRef}
-          fullWidth
-          size="small"
-          placeholder="Search meetings, todos, emails, teams..."
-          value={query}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onFocus={() => {
-            if (results.length > 0) {
-              setOpen(true)
-            }
+    <>
+      <IconButton
+        onClick={handleOpen}
+        sx={{
+          color: 'text.secondary',
+          '&:hover': {
+            bgcolor: 'rgba(0, 150, 136, 0.08)',
+            color: 'primary.main',
+          },
+        }}
+        aria-label="search"
+      >
+        <SearchIcon />
+      </IconButton>
+
+      <Dialog
+        open={dialogOpen}
+        onClose={handleClose}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            maxHeight: '80vh',
+          }
+        }}
+      >
+        <DialogTitle
+          sx={{
+            pb: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
           }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-              </InputAdornment>
-            ),
-            endAdornment: (
-              <InputAdornment position="end">
-                {loading && <CircularProgress size={16} />}
-                {query && !loading && (
-                  <IconButton
-                    size="small"
-                    onClick={handleClose}
-                    sx={{ p: 0.5 }}
-                  >
-                    <CloseIcon fontSize="small" />
-                  </IconButton>
-                )}
-              </InputAdornment>
-            ),
-            sx: {
-              bgcolor: 'background.paper',
-              borderRadius: 2,
-              '& .MuiOutlinedInput-notchedOutline': {
-                borderColor: 'divider'
-              },
-              '&:hover .MuiOutlinedInput-notchedOutline': {
-                borderColor: 'primary.main'
-              },
-              '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                borderColor: 'primary.main',
-                borderWidth: 2
-              }
-            }
-          }}
-        />
-        
-        <Popper
-          open={open && (results.length > 0 || loading)}
-          anchorEl={searchInputRef.current}
-          placement="bottom-start"
-          style={{ zIndex: 1300, width: searchInputRef.current?.offsetWidth || 400 }}
-          modifiers={[
-            {
-              name: 'offset',
-              options: {
-                offset: [0, 8]
-              }
-            }
-          ]}
         >
-          <Paper
-            elevation={8}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <SearchIcon sx={{ color: 'primary.main' }} />
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Search
+            </Typography>
+          </Box>
+          <IconButton
+            onClick={handleClose}
+            size="small"
+            sx={{ color: 'text.secondary' }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0 }}>
+          <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
+            <TextField
+              inputRef={searchInputRef}
+              fullWidth
+              size="medium"
+              placeholder="Search meetings, todos, emails, teams..."
+              value={query}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              autoFocus
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ color: 'text.secondary' }} />
+                  </InputAdornment>
+                ),
+                endAdornment: (
+                  <InputAdornment position="end">
+                    {loading && <CircularProgress size={20} />}
+                    {query && !loading && (
+                      <IconButton
+                        size="small"
+                        onClick={() => {
+                          setQuery('')
+                          setResults([])
+                          if (searchInputRef.current) {
+                            searchInputRef.current.focus()
+                          }
+                        }}
+                        sx={{ p: 0.5 }}
+                      >
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </InputAdornment>
+                ),
+                sx: {
+                  bgcolor: 'background.paper',
+                  borderRadius: 2,
+                }
+              }}
+            />
+          </Box>
+
+          <Box
             sx={{
-              maxHeight: '500px',
+              maxHeight: '50vh',
               overflow: 'auto',
-              width: '100%',
-              borderRadius: 2,
-              border: '1px solid',
-              borderColor: 'divider'
             }}
           >
             {loading ? (
@@ -291,11 +315,17 @@ const SearchBar = () => {
                   No results found for "{query}"
                 </Typography>
               </Box>
-            ) : null}
-          </Paper>
-        </Popper>
-      </Box>
-    </ClickAwayListener>
+            ) : (
+              <Box sx={{ p: 3, textAlign: 'center' }}>
+                <Typography variant="body2" color="text.secondary">
+                  Start typing to search...
+                </Typography>
+              </Box>
+            )}
+          </Box>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

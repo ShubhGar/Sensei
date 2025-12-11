@@ -32,6 +32,8 @@ import GroupsIcon from '@mui/icons-material/Groups'
 import ForumIcon from '@mui/icons-material/Forum'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import SearchIcon from '@mui/icons-material/Search'
+import SmartToyIcon from '@mui/icons-material/SmartToy'
+import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import SettingsIcon from '@mui/icons-material/Settings'
 import DarkModeIcon from '@mui/icons-material/DarkMode'
@@ -47,6 +49,8 @@ import TeamsView from './components/TeamsView'
 import CommunicationsView from './components/CommunicationsView'
 import OldMeetingsView from './components/OldMeetingsView'
 import TodoView from './components/TodoView'
+import AIChatAssistant from './components/AIChatAssistant'
+import TrendsView from './components/TrendsView'
 import SearchBar from './components/SearchBar'
 import { authAPI } from './services/api'
 
@@ -373,6 +377,64 @@ function AppContent() {
                   Todos
                 </Box>
               </Button>
+              <Button
+                component={Link}
+                to="/ai-assistant"
+                startIcon={<SmartToyIcon />}
+                sx={{
+                  color: isActive('/ai-assistant') ? 'primary.main' : 'text.secondary',
+                  fontWeight: isActive('/ai-assistant') ? 700 : 500,
+                  bgcolor: isActive('/ai-assistant') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
+                  borderRadius: isActive('/ai-assistant') ? 2 : 0,
+                  px: { xs: 1, sm: 1.5, md: 2.5 },
+                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
+                  borderBottom: isActive('/ai-assistant') ? '3px solid' : 'none',
+                  borderBottomColor: 'primary.main',
+                  transition: 'all 0.2s ease',
+                  minWidth: { xs: 'auto', sm: '64px' },
+                  '& .MuiButton-startIcon': {
+                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                  },
+                  '&:hover': {
+                    bgcolor: isActive('/ai-assistant') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
+                    borderRadius: 2,
+                  },
+                }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                  AI Assistant
+                </Box>
+              </Button>
+              <Button
+                component={Link}
+                to="/trends"
+                startIcon={<TrendingUpIcon />}
+                sx={{
+                  color: isActive('/trends') ? 'primary.main' : 'text.secondary',
+                  fontWeight: isActive('/trends') ? 700 : 500,
+                  bgcolor: isActive('/trends') ? 'rgba(0, 150, 136, 0.12)' : 'transparent',
+                  borderRadius: isActive('/trends') ? 2 : 0,
+                  px: { xs: 1, sm: 1.5, md: 2.5 },
+                  py: { xs: 0.75, sm: 0.875, md: 1 },
+                  fontSize: { xs: '0.7rem', sm: '0.8rem', md: '0.875rem' },
+                  borderBottom: isActive('/trends') ? '3px solid' : 'none',
+                  borderBottomColor: 'primary.main',
+                  transition: 'all 0.2s ease',
+                  minWidth: { xs: 'auto', sm: '64px' },
+                  '& .MuiButton-startIcon': {
+                    marginRight: { xs: 0, sm: 0.5, md: 1 },
+                  },
+                  '&:hover': {
+                    bgcolor: isActive('/trends') ? 'rgba(0, 150, 136, 0.18)' : 'rgba(0, 150, 136, 0.08)',
+                    borderRadius: 2,
+                  },
+                }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                  Trends
+                </Box>
+              </Button>
             </Box>
             <Box 
               sx={{ 
@@ -386,9 +448,7 @@ function AppContent() {
               }}
             >
               <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' }, height: 32, mx: { xs: 0.5, sm: 1 } }} />
-              <Box sx={{ display: { xs: 'none', sm: 'block' }, minWidth: { sm: '200px', md: '250px' } }}>
-                <SearchBar />
-              </Box>
+              <SearchBar />
               {isAuthenticated ? (
                 <>
                   <Chip
@@ -565,6 +625,8 @@ function AppContent() {
             <Route path="/teams" element={<TeamsView />} />
             <Route path="/meetings" element={<OldMeetingsView />} />
             <Route path="/todos" element={<TodoView />} />
+            <Route path="/ai-assistant" element={<AIChatAssistant />} />
+            <Route path="/trends" element={<TrendsView />} />
             <Route path="/auth/success" element={<Box sx={{ textAlign: 'center', py: 4 }}><Typography>Authentication successful! Redirecting...</Typography></Box>} />
             <Route path="/auth/error" element={<Box sx={{ textAlign: 'center', py: 4 }}><Typography>Authentication failed. Redirecting...</Typography></Box>} />
           </Routes>

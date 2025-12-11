@@ -104,9 +104,23 @@ const Home = () => {
     loadLatestMeetings()
   }, [loadEmailSummary, loadTeamsSummary, loadLatestMeetings])
 
-  const handleMeetingClick = (meeting) => {
-    setSelectedMeeting(meeting)
-    setMeetingDialogOpen(true)
+  const handleMeetingClick = async (meeting) => {
+    setLoading(true)
+    setError(null)
+    try {
+      // Fetch full meeting details including MOM, FAQs, email draft, etc.
+      const response = await transcriptionAPI.getSessionDetails(meeting.id)
+      setSelectedMeeting(response.data)
+      setMeetingDialogOpen(true)
+    } catch (err) {
+      console.error('Error loading meeting details:', err)
+      // Fallback to the basic meeting data if detailed fetch fails
+      setSelectedMeeting(meeting)
+      setMeetingDialogOpen(true)
+      setError('Could not load full meeting details. Showing available data.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const formatDate = (dateString) => {
@@ -907,6 +921,17 @@ const Home = () => {
             </DialogTitle>
             <DialogContent>
               <Box sx={{ mt: 1 }}>
+                {/* Show message if no details available */}
+                {!selectedMeeting.mom && 
+                 !selectedMeeting.faqs && 
+                 !selectedMeeting.email_draft && 
+                 !selectedMeeting.full_transcript && 
+                 !selectedMeeting.transcript && (
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    This meeting doesn't have detailed information yet. Generate a summary or process the transcript to see MOM, FAQs, and other details.
+                  </Alert>
+                )}
+                
                 {/* MOM Section */}
                 {selectedMeeting.mom && (
                   <Accordion defaultExpanded sx={{ mb: 2, bgcolor: 'background.default' }}>

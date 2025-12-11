@@ -18,11 +18,26 @@ import {
   DialogActions,
   TextField,
   Tabs,
-  Tab
+  Tab,
+  Divider,
+  IconButton,
+  Collapse,
+  Avatar,
+  Tooltip
 } from '@mui/material'
 import EmailIcon from '@mui/icons-material/Email'
 import InboxIcon from '@mui/icons-material/Inbox'
 import GroupsIcon from '@mui/icons-material/Groups'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import AttachFileIcon from '@mui/icons-material/AttachFile'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import PersonIcon from '@mui/icons-material/Person'
+import PriorityHighIcon from '@mui/icons-material/PriorityHigh'
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
+import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead'
+import MarkEmailUnreadIcon from '@mui/icons-material/MarkEmailUnread'
+import AddTaskIcon from '@mui/icons-material/AddTask'
 import { emailAPI, authAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
 import ContextMenu from './ContextMenu'
@@ -43,6 +58,9 @@ const EmailView = () => {
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenInput, setTokenInput] = useState('')
   const [tokenLoading, setTokenLoading] = useState(false)
+  const [summarizingEmails, setSummarizingEmails] = useState(new Set())
+  const [generatingTodos, setGeneratingTodos] = useState(new Set())
+  const [expandedEmails, setExpandedEmails] = useState(new Set())
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -130,6 +148,63 @@ const EmailView = () => {
     }
   }
 
+  const handleSummarizeEmail = async (emailId) => {
+    // Check if already has summary
+    const email = emails.find(e => e.id === emailId)
+    if (email && email.summary) {
+      return // Already summarized
+    }
+
+    setSummarizingEmails(prev => new Set(prev).add(emailId))
+    setError(null)
+    
+    try {
+      const response = await emailAPI.summarizeEmail(emailId)
+      const summaryText = response.data.summary
+      
+      // Update the email in the list with the summary
+      setEmails(prevEmails => 
+        prevEmails.map(e => 
+          e.id === emailId ? { ...e, summary: summaryText } : e
+        )
+      )
+    } catch (err) {
+      setError('Failed to summarize email: ' + (err.response?.data?.detail || err.message))
+    } finally {
+      setSummarizingEmails(prev => {
+        const next = new Set(prev)
+        next.delete(emailId)
+        return next
+      })
+    }
+  }
+
+  const handleGenerateTodos = async (emailId) => {
+    setGeneratingTodos(prev => new Set(prev).add(emailId))
+    setError(null)
+    
+    try {
+      const response = await emailAPI.generateTodos(emailId)
+      const todos = response.data
+      
+      // Show success message
+      setError(null)
+      // You could also show a success notification here
+      alert(`Successfully generated ${todos.length} todo${todos.length !== 1 ? 's' : ''} from email!`)
+      
+      // Optionally navigate to todos view
+      // navigate('/todos')
+    } catch (err) {
+      setError('Failed to generate todos: ' + (err.response?.data?.detail || err.message))
+    } finally {
+      setGeneratingTodos(prev => {
+        const next = new Set(prev)
+        next.delete(emailId)
+        return next
+      })
+    }
+  }
+
   const handleContextMenu = (event, email) => {
     event.preventDefault()
     setContextMenu({
@@ -141,6 +216,74 @@ const EmailView = () => {
 
   const handleCloseContextMenu = () => {
     setContextMenu({ open: false, anchorEl: null, data: null })
+  }
+
+  const toggleEmailExpansion = (emailId) => {
+    setExpandedEmails(prev => {
+      const next = new Set(prev)
+      if (next.has(emailId)) {
+        next.delete(emailId)
+      } else {
+        next.add(emailId)
+      }
+      return next
+    })
+  }
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Unknown date'
+    try {
+      const date = new Date(dateString)
+      const now = new Date()
+      const diffMs = now - date
+      const diffMins = Math.floor(diffMs / 60000)
+      const diffHours = Math.floor(diffMs / 3600000)
+      const diffDays = Math.floor(diffMs / 86400000)
+
+      if (diffMins < 1) return 'Just now'
+      if (diffMins < 60) return `${diffMins} min${diffMins > 1 ? 's' : ''} ago`
+      if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`
+      if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`
+      
+      return date.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric',
+        year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+      })
+    } catch (e) {
+      return dateString
+    }
+  }
+
+  const getInitials = (name) => {
+    if (!name) return '?'
+    const parts = name.trim().split(/\s+/)
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    }
+    return name.substring(0, 2).toUpperCase()
+  }
+
+  const getImportanceColor = (importance) => {
+    switch (importance?.toLowerCase()) {
+      case 'high':
+        return 'error.main'
+      case 'low':
+        return 'text.secondary'
+      default:
+        return 'primary.main'
+    }
+  }
+
+  const getImportanceIcon = (importance) => {
+    switch (importance?.toLowerCase()) {
+      case 'high':
+        return <PriorityHighIcon fontSize="small" />
+      case 'low':
+        return <ArrowDownwardIcon fontSize="small" />
+      default:
+        return null
+    }
   }
 
   const handleNavChange = (event, newValue) => {
@@ -360,99 +503,375 @@ const EmailView = () => {
                 </Button>
               </Box>
             ) : (
-              <List sx={{ p: 0 }}>
-                {emails.map((email) => (
-                <ListItem
-                  key={email.id}
-                  onContextMenu={(e) => handleContextMenu(e, email)}
-                  sx={{
-                    border: '1px solid',
-                    borderColor: 'secondary.light',
-                    borderRadius: 2,
-                    mb: 1.5,
-                    bgcolor: email.is_urgent 
-                      ? (mode === 'dark' ? '#3A2A1E' : '#FFF8E1')
-                      : 'background.paper',
-                    transition: 'all 0.2s ease',
-                    '&:hover': {
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                      transform: 'translateY(-2px)',
-                    },
-                    borderLeft: email.is_urgent ? '4px solid' : 'none',
-                    borderLeftColor: email.is_urgent ? 'error.main' : 'transparent',
-                    cursor: 'context-menu',
-                  }}
-                >
-                  <ListItemText
-                    primary={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
-                        <Typography 
-                          variant="subtitle1"
-                          sx={{ 
-                            fontWeight: 600,
-                            color: 'text.primary',
-                          }}
-                        >
-                          {email.subject || '(No Subject)'}
-                        </Typography>
-                        {email.is_urgent && (
-                          <Chip 
-                            label="Urgent" 
-                            size="small"
-                            sx={{ 
-                              bgcolor: 'error.main',
-                              color: 'white',
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {emails.map((email) => {
+                  const isExpanded = expandedEmails.has(email.id)
+                  const hasBodyPreview = email.body_preview && email.body_preview.trim().length > 0
+                  
+                  return (
+                    <Card
+                      key={email.id}
+                      onContextMenu={(e) => handleContextMenu(e, email)}
+                      sx={{
+                        border: '1px solid',
+                        borderColor: email.is_urgent 
+                          ? 'error.main' 
+                          : email.importance === 'high'
+                          ? 'warning.main'
+                          : 'divider',
+                        borderRadius: 2,
+                        bgcolor: email.is_urgent 
+                          ? (mode === 'dark' ? 'rgba(211, 47, 47, 0.1)' : 'rgba(211, 47, 47, 0.05)')
+                          : email.importance === 'high'
+                          ? (mode === 'dark' ? 'rgba(255, 152, 0, 0.1)' : 'rgba(255, 152, 0, 0.05)')
+                          : !email.is_read
+                          ? (mode === 'dark' ? 'rgba(33, 150, 243, 0.1)' : 'rgba(33, 150, 243, 0.05)')
+                          : 'background.paper',
+                        transition: 'all 0.3s ease',
+                        boxShadow: isExpanded 
+                          ? (mode === 'dark' ? '0 4px 20px rgba(0,0,0,0.3)' : '0 4px 20px rgba(0,0,0,0.1)')
+                          : '0 1px 3px rgba(0,0,0,0.1)',
+                        '&:hover': {
+                          boxShadow: mode === 'dark' 
+                            ? '0 6px 24px rgba(0,0,0,0.4)' 
+                            : '0 6px 24px rgba(0,0,0,0.15)',
+                          transform: 'translateY(-2px)',
+                        },
+                        borderLeft: email.is_urgent || email.importance === 'high' ? '4px solid' : 'none',
+                        borderLeftColor: email.is_urgent 
+                          ? 'error.main' 
+                          : email.importance === 'high'
+                          ? 'warning.main'
+                          : 'transparent',
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => toggleEmailExpansion(email.id)}
+                    >
+                      <CardContent sx={{ p: 2.5, '&:last-child': { pb: 2.5 } }}>
+                        {/* Header Section */}
+                        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+                          {/* Avatar */}
+                          <Avatar
+                            sx={{
+                              bgcolor: email.is_urgent 
+                                ? 'error.main' 
+                                : email.importance === 'high'
+                                ? 'warning.main'
+                                : 'primary.main',
+                              width: 48,
+                              height: 48,
+                              fontSize: '1.1rem',
                               fontWeight: 600,
-                            }}
-                          />
-                        )}
-                        {!email.is_read && (
-                          <Chip 
-                            label="Unread" 
-                            size="small"
-                            sx={{ 
-                              bgcolor: 'primary.main',
-                              color: 'white',
-                              fontWeight: 600,
-                            }}
-                          />
-                        )}
-                      </Box>
-                    }
-                    secondary={
-                      <Box>
-                        <Typography 
-                          variant="body2" 
-                          color="text.secondary"
-                          sx={{ mb: 0.5 }}
-                        >
-                          From: {email.sender}
-                        </Typography>
-                        {email.summary && (
-                          <Typography 
-                            variant="body2" 
-                            sx={{ 
-                              mt: 1,
-                              color: 'text.primary',
-                              lineHeight: 1.6,
                             }}
                           >
-                            {email.summary}
-                          </Typography>
-                        )}
-                      </Box>
-                    }
-                  />
-                  <Button
-                    size="small"
-                    onClick={() => handleSuggestReply(email.id)}
-                    variant="outlined"
-                  >
-                    Suggest Reply
-                  </Button>
-                </ListItem>
-              ))}
-              </List>
+                            {getInitials(email.sender)}
+                          </Avatar>
+
+                          {/* Main Content */}
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            {/* Subject and Badges Row */}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                              <Typography 
+                                variant="h6"
+                                sx={{ 
+                                  fontWeight: email.is_read ? 500 : 700,
+                                  color: 'text.primary',
+                                  fontSize: '1.1rem',
+                                  flex: 1,
+                                  minWidth: 200,
+                                }}
+                              >
+                                {email.subject || '(No Subject)'}
+                              </Typography>
+                              
+                              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
+                                {!email.is_read && (
+                                  <Tooltip title="Unread">
+                                    <Chip 
+                                      icon={<MarkEmailUnreadIcon />}
+                                      label="Unread" 
+                                      size="small"
+                                      sx={{ 
+                                        bgcolor: 'primary.main',
+                                        color: 'white',
+                                        fontWeight: 600,
+                                        height: 24,
+                                      }}
+                                    />
+                                  </Tooltip>
+                                )}
+                                {email.is_urgent && (
+                                  <Tooltip title="Urgent">
+                                    <Chip 
+                                      icon={<PriorityHighIcon />}
+                                      label="Urgent" 
+                                      size="small"
+                                      sx={{ 
+                                        bgcolor: 'error.main',
+                                        color: 'white',
+                                        fontWeight: 600,
+                                        height: 24,
+                                      }}
+                                    />
+                                  </Tooltip>
+                                )}
+                                {email.importance && email.importance !== 'normal' && (
+                                  <Tooltip title={`Importance: ${email.importance}`}>
+                                    <Chip 
+                                      icon={getImportanceIcon(email.importance)}
+                                      label={email.importance.charAt(0).toUpperCase() + email.importance.slice(1)}
+                                      size="small"
+                                      sx={{ 
+                                        bgcolor: getImportanceColor(email.importance),
+                                        color: 'white',
+                                        fontWeight: 600,
+                                        height: 24,
+                                      }}
+                                    />
+                                  </Tooltip>
+                                )}
+                                {email.has_attachments && (
+                                  <Tooltip title="Has attachments">
+                                    <Chip 
+                                      icon={<AttachFileIcon />}
+                                      label="Attachment"
+                                      size="small"
+                                      variant="outlined"
+                                      sx={{ 
+                                        height: 24,
+                                        borderColor: 'text.secondary',
+                                        color: 'text.secondary',
+                                      }}
+                                    />
+                                  </Tooltip>
+                                )}
+                                {email.needs_approval && (
+                                  <Tooltip title="Needs approval">
+                                    <Chip 
+                                      label="Approval" 
+                                      size="small"
+                                      sx={{ 
+                                        bgcolor: 'warning.main',
+                                        color: 'white',
+                                        fontWeight: 600,
+                                        height: 24,
+                                      }}
+                                    />
+                                  </Tooltip>
+                                )}
+                              </Box>
+                            </Box>
+
+                            {/* Sender and Date Row */}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <PersonIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                                <Typography 
+                                  variant="body2" 
+                                  sx={{ 
+                                    color: 'text.primary',
+                                    fontWeight: email.is_read ? 400 : 600,
+                                  }}
+                                >
+                                  {email.sender || 'Unknown Sender'}
+                                </Typography>
+                                {email.sender_email && email.sender_email !== email.sender && (
+                                  <Typography 
+                                    variant="caption" 
+                                    sx={{ 
+                                      color: 'text.secondary',
+                                      ml: 0.5,
+                                    }}
+                                  >
+                                    &lt;{email.sender_email}&gt;
+                                  </Typography>
+                                )}
+                              </Box>
+                              
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <AccessTimeIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                                <Typography 
+                                  variant="body2" 
+                                  color="text.secondary"
+                                >
+                                  {formatDate(email.received_at)}
+                                </Typography>
+                              </Box>
+                            </Box>
+
+                            {/* Body Preview (Collapsed View) */}
+                            {!isExpanded && hasBodyPreview && (
+                              <Typography 
+                                variant="body2" 
+                                sx={{ 
+                                  color: 'text.secondary',
+                                  lineHeight: 1.6,
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  mt: 0.5,
+                                }}
+                              >
+                                {email.body_preview}
+                              </Typography>
+                            )}
+
+                            {/* Summary (if available) */}
+                            {email.summary && (
+                              <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'background.default', borderRadius: 1 }}>
+                                <Typography 
+                                  variant="caption" 
+                                  sx={{ 
+                                    color: 'text.secondary',
+                                    fontWeight: 600,
+                                    textTransform: 'uppercase',
+                                    letterSpacing: 0.5,
+                                    mb: 0.5,
+                                    display: 'block',
+                                  }}
+                                >
+                                  AI Summary
+                                </Typography>
+                                <Typography 
+                                  variant="body2" 
+                                  sx={{ 
+                                    color: 'text.primary',
+                                    lineHeight: 1.7,
+                                  }}
+                                >
+                                  {email.summary}
+                                </Typography>
+                              </Box>
+                            )}
+
+                            {/* Expanded Content */}
+                            <Collapse in={isExpanded}>
+                              <Box sx={{ mt: 2 }}>
+                                <Divider sx={{ mb: 2 }} />
+                                
+                                {/* Full Body Preview */}
+                                {hasBodyPreview && (
+                                  <Box sx={{ mb: 2 }}>
+                                    <Typography 
+                                      variant="caption" 
+                                      sx={{ 
+                                        color: 'text.secondary',
+                                        fontWeight: 600,
+                                        textTransform: 'uppercase',
+                                        letterSpacing: 0.5,
+                                        mb: 1,
+                                        display: 'block',
+                                      }}
+                                    >
+                                      Preview
+                                    </Typography>
+                                    <Typography 
+                                      variant="body2" 
+                                      sx={{ 
+                                        color: 'text.primary',
+                                        lineHeight: 1.8,
+                                        whiteSpace: 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                      }}
+                                    >
+                                      {email.body_preview}
+                                    </Typography>
+                                  </Box>
+                                )}
+
+                                {/* Email Metadata */}
+                                <Box sx={{ 
+                                  display: 'flex', 
+                                  flexDirection: 'column', 
+                                  gap: 1,
+                                  p: 1.5,
+                                  bgcolor: 'background.default',
+                                  borderRadius: 1,
+                                }}>
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+                                    <Typography variant="caption" color="text.secondary">
+                                      <strong>Status:</strong> {email.is_read ? 'Read' : 'Unread'}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                      <strong>Importance:</strong> {email.importance || 'Normal'}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                      <strong>Attachments:</strong> {email.has_attachments ? 'Yes' : 'No'}
+                                    </Typography>
+                                  </Box>
+                                  {email.received_at && (
+                                    <Typography variant="caption" color="text.secondary">
+                                      <strong>Received:</strong> {new Date(email.received_at).toLocaleString()}
+                                    </Typography>
+                                  )}
+                                </Box>
+
+                                {/* Action Buttons */}
+                                <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
+                                  <Button
+                                    size="small"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleSummarizeEmail(email.id)
+                                    }}
+                                    variant="outlined"
+                                    disabled={summarizingEmails.has(email.id)}
+                                    startIcon={summarizingEmails.has(email.id) ? <CircularProgress size={16} /> : null}
+                                  >
+                                    {summarizingEmails.has(email.id) ? 'Summarizing...' : 'Summarize'}
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleSuggestReply(email.id)
+                                    }}
+                                    variant="outlined"
+                                  >
+                                    Suggest Reply
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleGenerateTodos(email.id)
+                                    }}
+                                    variant="contained"
+                                    color="primary"
+                                    disabled={generatingTodos.has(email.id)}
+                                    startIcon={generatingTodos.has(email.id) ? <CircularProgress size={16} /> : <AddTaskIcon />}
+                                  >
+                                    {generatingTodos.has(email.id) ? 'Generating...' : 'Generate Todos'}
+                                  </Button>
+                                </Box>
+                              </Box>
+                            </Collapse>
+                          </Box>
+
+                          {/* Expand/Collapse Icon */}
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleEmailExpansion(email.id)
+                            }}
+                            sx={{
+                              color: 'text.secondary',
+                              '&:hover': {
+                                bgcolor: 'action.hover',
+                              },
+                            }}
+                          >
+                            {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                          </IconButton>
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  )
+                })}
+              </Box>
             )}
           </CardContent>
         </Card>
@@ -637,6 +1056,7 @@ const EmailView = () => {
 }
 
 export default EmailView
+
 
 
 

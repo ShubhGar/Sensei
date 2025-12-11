@@ -76,3 +76,4 @@ wheel==0.45.1
 yarl==1.22.0
 pyaudio==0.2.14
 openai-whisper
+boto3>=1.34.0

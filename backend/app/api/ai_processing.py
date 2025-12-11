@@ -5,9 +5,10 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import ValidationError
+from datetime import datetime
 import logging
 
-from app.models.schemas import AIProcessingRequest, AIProcessingResponse, MOMResponse, FAQItem, EmailDraft
+from app.models.schemas import AIProcessingRequest, AIProcessingResponse, MOMResponse, FAQItem, EmailDraft, DecisionItem, ActionItem
 from app.database import get_db, MeetingSession
 from app.services.ai_service import AIService
 
@@ -26,18 +27,41 @@ async def summarize_transcript(
         logger.info(f"[AI Processing] Received summarize request for session_id: {request.session_id}")
         logger.info(f"[AI Processing] Request params - include_faqs: {request.include_faqs}, include_email_draft: {request.include_email_draft}")
         
-        # Get meeting session
+        # Get meeting session - check database first, then memory
         result = await db.execute(
             select(MeetingSession).where(MeetingSession.id == request.session_id)
         )
         session = result.scalar_one_or_none()
         
+        # If not in DB, check memory and create DB entry
         if not session:
-            logger.warning(f"[AI Processing] ERROR: Session {request.session_id} not found")
-            raise HTTPException(status_code=404, detail="Meeting session not found")
+            from app.api.transcription import active_sessions, get_active_sessions_lock
+            async with get_active_sessions_lock():
+                if request.session_id in active_sessions:
+                    active_data = active_sessions[request.session_id]
+                    session_obj = active_data.get("session", {})
+                    transcript = active_data.get("full_transcript", active_data.get("transcript_buffer", ""))
+                    
+                    # Create session in database now (before generating insights)
+                    session = MeetingSession(
+                        id=request.session_id,
+                        title=session_obj.get("title", "Untitled Meeting"),
+                        started_at=session_obj.get("started_at", datetime.utcnow()),
+                        is_active=False,
+                        transcript=active_data.get("transcript_buffer", ""),
+                        full_transcript=transcript
+                    )
+                    db.add(session)
+                    await db.commit()
+                    await db.refresh(session)
+                    logger.info(f"[AI Processing] Created session {request.session_id} in database before generating insights")
+                else:
+                    logger.warning(f"[AI Processing] ERROR: Session {request.session_id} not found in DB or memory")
+                    raise HTTPException(status_code=404, detail="Meeting session not found")
+        else:
+            # Get transcript from either full_transcript or transcript field
+            transcript = session.full_transcript or session.transcript or ""
         
-        # Get transcript from either full_transcript or transcript field
-        transcript = session.full_transcript or session.transcript or ""
         logger.info(f"[AI Processing] Transcript length: {len(transcript)}, full_transcript: {bool(session.full_transcript)}, transcript: {bool(session.transcript)}")
         
         if not transcript or not transcript.strip():
@@ -72,6 +96,25 @@ async def summarize_transcript(
             mom_data["attendees"] = []
         
         logger.info(f"[AI Processing] Normalized MOM data - summary length: {len(mom_data.get('summary', ''))}, decisions: {len(mom_data.get('decisions', []))}, action_items: {len(mom_data.get('action_items', []))}")
+        
+        # Generate meeting title from transcript if title is still default/untitled
+        current_title = session.title or "Untitled Meeting"
+        if current_title == "Untitled Meeting" or not current_title.strip():
+            try:
+                logger.info(f"[AI Processing] Generating meeting title for session {request.session_id}...")
+                generated_title = await ai_service.generate_meeting_title(transcript)
+                if generated_title and generated_title != "Untitled Meeting":
+                    session.title = generated_title
+                    # Also update in memory if session is still active
+                    from app.api.transcription import active_sessions, get_active_sessions_lock
+                    async with get_active_sessions_lock():
+                        if request.session_id in active_sessions:
+                            active_sessions[request.session_id]["session"]["title"] = generated_title
+                    logger.info(f"[AI Processing] Generated meeting title: {generated_title}")
+                else:
+                    logger.warning(f"[AI Processing] Title generation returned default, keeping existing title")
+            except Exception as e:
+                logger.warning(f"[AI Processing] Error generating meeting title: {e}, keeping existing title", exc_info=True)
         
         # Ensure decisions and action_items are properly formatted
         decisions = []
@@ -123,7 +166,11 @@ async def summarize_transcript(
                             context=faq.get("context")
                         ))
             except Exception as e:
-                logger.warning(f"[AI Processing] Error generating FAQs: {e}")
+                error_msg = str(e)
+                logger.warning(f"[AI Processing] Error generating FAQs: {error_msg}", exc_info=True)
+                # If it's a JSON parsing error, log more details
+                if "Invalid JSON" in error_msg or "JSON" in error_msg:
+                    logger.warning(f"[AI Processing] FAQ JSON parsing failed. This may indicate a truncated response or malformed JSON from the AI model.")
                 faqs = []  # Return empty list instead of None if requested
         
         # Generate email draft if requested
@@ -140,7 +187,11 @@ async def summarize_transcript(
                         bcc=email_data.get("bcc")
                     )
             except Exception as e:
-                logger.warning(f"[AI Processing] Error generating email draft: {e}")
+                error_msg = str(e)
+                logger.warning(f"[AI Processing] Error generating email draft: {error_msg}", exc_info=True)
+                # If it's a JSON parsing error, log more details
+                if "Invalid JSON" in error_msg or "JSON" in error_msg or "control character" in error_msg.lower():
+                    logger.warning(f"[AI Processing] Email draft JSON parsing failed. This may indicate unescaped newlines or malformed JSON from the AI model.")
                 email_draft = None
         
         # Detect risks

@@ -22,9 +22,13 @@ PyAudio is now included in `requirements.txt` and will be installed automaticall
 
 ## System Audio Capture Setup (macOS)
 
-To capture system audio (e.g., from Zoom, Teams, or other applications), you need to set up a virtual audio device on macOS using **BlackHole**.
+To capture system audio (e.g., from Zoom, Teams, or other applications), you need to set up a virtual audio device on macOS. There are several options available:
 
-### Step 1: Install BlackHole
+### Option 1: BlackHole (Recommended - Free)
+
+**BlackHole** is a free, open-source virtual audio driver for macOS.
+
+#### Step 1: Install BlackHole
 
 ```bash
 brew install blackhole-2ch
@@ -32,7 +36,7 @@ brew install blackhole-2ch
 
 Or download from: https://github.com/ExistentialAudio/BlackHole
 
-### Step 2: Configure Audio Routing
+#### Step 2: Configure Audio Routing
 
 1. Open **Audio MIDI Setup** (Applications → Utilities → Audio MIDI Setup)
 2. Click the **+** button at the bottom left and select **Create Multi-Output Device**
@@ -42,11 +46,55 @@ Or download from: https://github.com/ExistentialAudio/BlackHole
 4. Right-click on the Multi-Output Device and select **Use This Device For Sound Output**
 5. In Audio MIDI Setup, select **BlackHole 2ch** and set it as the input device for your application
 
-### Step 3: Configure System Audio Input
+#### Step 3: Configure System Audio Input
 
 1. Go to **System Settings** → **Sound**
 2. Set **Output** to your Multi-Output Device (created above)
 3. This routes system audio to both your speakers AND BlackHole
+
+### Option 2: Soundflower (Free, Older)
+
+**Soundflower** is an older free alternative, but may have compatibility issues with newer macOS versions.
+
+1. Download from: https://github.com/mattingalls/Soundflower
+2. Install the kernel extension (may require disabling System Integrity Protection)
+3. Follow similar Multi-Output Device setup as BlackHole
+
+### Option 3: Loopback (Paid - $99)
+
+**Loopback** is a commercial application with advanced audio routing capabilities.
+
+1. Purchase and download from: https://rogueamoeba.com/loopback/
+2. Create virtual audio devices through the Loopback interface
+3. The app will automatically create input devices that can be used
+
+### Option 4: Audio Hijack (Paid - $64)
+
+**Audio Hijack** is another commercial option that can capture audio from any application.
+
+1. Purchase and download from: https://rogueamoeba.com/audiohijack/
+2. Set up audio routing through the Audio Hijack interface
+3. Virtual devices created by Audio Hijack will be automatically detected
+
+### Option 5: Manual Device Selection
+
+If you have a virtual audio device already set up, you can manually specify it:
+
+1. List available devices by checking the backend logs when starting system audio capture
+2. Set the `AUDIO_DEVICE` environment variable to the device index or name:
+   ```bash
+   export AUDIO_DEVICE=2  # Use device index
+   # OR
+   export AUDIO_DEVICE="BlackHole"  # Use device name (partial match)
+   ```
+
+### Option 6: Fallback to Microphone
+
+If you don't need true system audio capture, you can use the microphone:
+
+1. Set `AUDIO_ALLOW_FALLBACK=true` in your `.env` file (this is the default)
+2. The system will automatically fall back to your default microphone input
+3. **Note**: This captures microphone audio, not system audio
 
 ### Step 4: Test Audio Capture
 

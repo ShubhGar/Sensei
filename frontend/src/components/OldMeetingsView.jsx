@@ -27,6 +27,7 @@ import MicIcon from '@mui/icons-material/Mic'
 import HistoryIcon from '@mui/icons-material/History'
 import { transcriptionAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
+import MeetingInsights from './MeetingInsights'
 
 const OldMeetingsView = () => {
   const navigate = useNavigate()
@@ -68,8 +69,37 @@ const OldMeetingsView = () => {
     }
   }
 
-  const handleExpand = (meetingId) => {
-    setExpandedMeeting(expandedMeeting === meetingId ? null : meetingId)
+  const handleExpand = async (meetingId) => {
+    if (expandedMeeting === meetingId) {
+      // Collapse if already expanded
+      setExpandedMeeting(null)
+      return
+    }
+    
+    // Expand and fetch full details
+    setLoading(true)
+    try {
+      // Find the meeting in the list
+      const meeting = meetings.find(m => m.id === meetingId)
+      if (meeting) {
+        // Try to fetch full details
+        try {
+          const response = await transcriptionAPI.getSessionDetails(meetingId)
+          // Update the meeting in the list with full details
+          setMeetings(prevMeetings => 
+            prevMeetings.map(m => 
+              m.id === meetingId ? { ...m, ...response.data } : m
+            )
+          )
+        } catch (err) {
+          console.error('Error loading full meeting details:', err)
+          // Continue with existing data if fetch fails
+        }
+      }
+      setExpandedMeeting(meetingId)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const formatDate = (dateString) => {
@@ -297,12 +327,17 @@ const OldMeetingsView = () => {
                   </Button>
                 </Box>
 
-                {expandedMeeting === meeting.id && (
-                  <Box sx={{ mt: 2 }}>
-                    <Divider sx={{ mb: 2 }} />
+                    {expandedMeeting === meeting.id && (
+                      <Box sx={{ mt: 2 }}>
+                        <Divider sx={{ mb: 2 }} />
 
-                    {/* MOM Section */}
-                    {meeting.mom && (
+                        {/* Meeting Insights */}
+                        <Box sx={{ mb: 2 }}>
+                          <MeetingInsights sessionId={meeting.id} />
+                        </Box>
+
+                        {/* MOM Section */}
+                        {meeting.mom && (
                       <Accordion defaultExpanded sx={{ mb: 2, bgcolor: 'background.default' }}>
                         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

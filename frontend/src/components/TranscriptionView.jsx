@@ -17,7 +17,8 @@ import {
   Grid,
   Divider,
   Tabs,
-  Tab
+  Tab,
+  InputAdornment
 } from '@mui/material'
 import MicIcon from '@mui/icons-material/Mic'
 import SummarizeIcon from '@mui/icons-material/Summarize'
@@ -32,6 +33,8 @@ const TranscriptionView = () => {
   const [sessionId, setSessionId] = useState(null)
   const [transcript, setTranscript] = useState('')
   const [fullTranscript, setFullTranscript] = useState('')
+  const [editedTranscript, setEditedTranscript] = useState('') // Editable transcript state
+  const [hasUserEdited, setHasUserEdited] = useState(false) // Track if user has manually edited
   const [title, setTitle] = useState('')
   const [isRecording, setIsRecording] = useState(false)
   const [showOptions, setShowOptions] = useState(true)
@@ -43,6 +46,8 @@ const TranscriptionView = () => {
   const [risks, setRisks] = useState([])
   const [audioSource, setAudioSource] = useState('user') // 'user', 'system', or 'both'
   const [voiceActivity, setVoiceActivity] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const saveTimeoutRef = useRef(null)
   const wsRef = useRef(null)
   const wsSystemRef = useRef(null) // Separate WebSocket for system audio
   const mediaRecorderRef = useRef(null)
@@ -103,8 +108,19 @@ const TranscriptionView = () => {
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
         audioContextRef.current.close()
       }
+      // Clear save timeout
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+      }
     }
   }, [])
+  
+  // Initialize editedTranscript when fullTranscript changes (but only if user hasn't edited)
+  useEffect(() => {
+    if (fullTranscript && !hasUserEdited) {
+      setEditedTranscript(fullTranscript)
+    }
+  }, [fullTranscript, hasUserEdited])
 
   useEffect(() => {
     const currentTab = getNavTab()
@@ -211,19 +227,35 @@ const TranscriptionView = () => {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data)
+            console.log('[User Microphone] WebSocket message received:', data.type, data)
             if (data.type === 'transcript') {
               console.log('[User Microphone] Received transcript:', data.speaker, data.text?.substring(0, 50))
+              console.log('[User Microphone] Full transcript length:', data.full_transcript?.length || 0)
               // Use full_transcript from server which is already merged
-              setFullTranscript(data.full_transcript || '')
+              if (data.full_transcript) {
+                setFullTranscript(data.full_transcript)
+                // Only update editedTranscript if user hasn't manually edited
+                if (!hasUserEdited) {
+                  setEditedTranscript(data.full_transcript)
+                }
+                console.log('[User Microphone] Updated fullTranscript state')
+              }
               // Show latest transcript with speaker label
               if (data.speaker && data.text) {
                 setTranscript(`"${data.speaker}": ${data.text}`)
-              } else {
-                setTranscript(data.text || '')
+                console.log('[User Microphone] Updated transcript state with speaker')
+              } else if (data.text) {
+                setTranscript(data.text)
+                console.log('[User Microphone] Updated transcript state')
               }
+            } else if (data.type === 'error') {
+              console.error('[User Microphone] Transcription error:', data.message)
+              setError(data.message || 'Transcription service error')
+            } else {
+              console.log('[User Microphone] Unknown message type:', data.type)
             }
           } catch (err) {
-            console.error('Error parsing WebSocket message:', err)
+            console.error('Error parsing WebSocket message:', err, event.data)
           }
         }
         
@@ -271,21 +303,35 @@ const TranscriptionView = () => {
         wsSystem.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data)
+            console.log('[System Audio] WebSocket message received:', data.type, data)
             if (data.type === 'transcript') {
               console.log('[System Audio] Received transcript:', data.speaker, data.text?.substring(0, 50))
+              console.log('[System Audio] Full transcript length:', data.full_transcript?.length || 0)
               // Use full_transcript from server which is already merged
-              setFullTranscript(data.full_transcript || '')
+              if (data.full_transcript) {
+                setFullTranscript(data.full_transcript)
+                // Only update editedTranscript if user hasn't manually edited
+                if (!hasUserEdited) {
+                  setEditedTranscript(data.full_transcript)
+                }
+                console.log('[System Audio] Updated fullTranscript state')
+              }
               // Show latest transcript with speaker label
               if (data.speaker && data.text) {
                 setTranscript(`"${data.speaker}": ${data.text}`)
-              } else {
-                setTranscript(data.text || '')
+                console.log('[System Audio] Updated transcript state with speaker')
+              } else if (data.text) {
+                setTranscript(data.text)
+                console.log('[System Audio] Updated transcript state')
               }
             } else if (data.type === 'error') {
+              console.error('[System Audio] Transcription error:', data.message)
               setError(data.message || 'System audio capture error')
+            } else {
+              console.log('[System Audio] Unknown message type:', data.type)
             }
           } catch (err) {
-            console.error('Error parsing WebSocket message:', err)
+            console.error('Error parsing WebSocket message:', err, event.data)
           }
         }
         
@@ -372,11 +418,53 @@ const TranscriptionView = () => {
     }
   }
 
+  // Auto-save transcript when edited
+  const saveTranscript = async (transcriptText) => {
+    if (!sessionId || !transcriptText) return
+    
+    setIsSaving(true)
+    try {
+      await transcriptionAPI.updateTranscript(sessionId, transcriptText)
+      setFullTranscript(transcriptText)
+      console.log('[Transcription] Transcript saved successfully')
+    } catch (err) {
+      console.error('Failed to save transcript:', err)
+      setError('Failed to save transcript: ' + err.message)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // Handle transcript edit with debounced auto-save
+  const handleTranscriptChange = (event) => {
+    const newValue = event.target.value
+    setEditedTranscript(newValue)
+    setHasUserEdited(true) // Mark that user has manually edited
+    
+    // Clear existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+    
+    // Debounce auto-save (save after 2 seconds of no typing)
+    saveTimeoutRef.current = setTimeout(() => {
+      saveTranscript(newValue)
+    }, 2000)
+  }
+
   const generateInsights = async () => {
     if (!sessionId) return
     
     setLoading(true)
     try {
+      // Save the edited transcript first if it's different from the stored one
+      const transcriptToUse = editedTranscript || fullTranscript || transcript
+      if (editedTranscript && editedTranscript !== fullTranscript) {
+        await saveTranscript(editedTranscript)
+        // Wait a bit for the save to complete
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+      
       const response = await aiAPI.processTranscript(sessionId, true, true)
       setMom(response.data.mom)
       setFaqs(response.data.faqs || [])
@@ -649,11 +737,13 @@ const TranscriptionView = () => {
         <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 } }}>
           <TextField
             fullWidth
-            label="Meeting Title"
+            label="Meeting Title (Optional)"
+            placeholder="Leave empty to auto-generate from transcript"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             sx={{ mb: 2 }}
             disabled={isRecording}
+            helperText="Title will be automatically generated from transcript content if left empty"
           />
           <FormControl component="fieldset" sx={{ mb: 2 }} disabled={isRecording}>
             <FormLabel component="legend">Audio Source</FormLabel>
@@ -764,56 +854,71 @@ const TranscriptionView = () => {
         </CardContent>
       </Card>
 
-      {/* Live Transcript */}
-      <Card 
-        sx={{ 
-          mb: 3,
-          background: getCardBackground(),
-          borderLeft: '4px solid',
-          borderLeftColor: 'primary.main',
-          transition: 'all 0.3s ease',
-        }}
-      >
-        <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 } }}>
-          <Typography 
-            variant="h6" 
-            gutterBottom
-            sx={{ 
-              fontWeight: 600,
-              color: 'text.primary',
-              mb: 2,
-            }}
-          >
-            Live Transcript
-          </Typography>
-          <Paper 
-            sx={{ 
-              p: 3, 
-              minHeight: 200, 
-              maxHeight: 400, 
-              overflow: 'auto', 
-              bgcolor: 'background.default',
-              borderRadius: 2,
-              border: '1px solid',
-              borderColor: 'secondary.light',
-            }}
-          >
+      {/* Live Transcript - Show when recording or have session */}
+      {(isRecording || sessionId) && (
+        <Card 
+          sx={{ 
+            mb: 3,
+            background: getCardBackground(),
+            borderLeft: '4px solid',
+            borderLeftColor: 'primary.main',
+            transition: 'all 0.3s ease',
+          }}
+        >
+          <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 } }}>
             <Typography 
-              variant="body1" 
-              component="pre" 
+              variant="h6" 
+              gutterBottom
               sx={{ 
-                whiteSpace: 'pre-wrap', 
-                fontFamily: 'inherit',
+                fontWeight: 600,
                 color: 'text.primary',
-                lineHeight: 1.7,
-                m: 0,
+                mb: 2,
               }}
             >
-              {fullTranscript || transcript || 'Transcript will appear here...'}
+              Live Transcript
             </Typography>
-          </Paper>
-        </CardContent>
-      </Card>
+            <TextField
+              fullWidth
+              multiline
+              minRows={8}
+              maxRows={15}
+              value={editedTranscript || fullTranscript || transcript || (isRecording ? 'Listening... Transcript will appear here as you speak.' : 'Transcript will appear here...')}
+              onChange={handleTranscriptChange}
+              placeholder={isRecording ? 'Listening... Transcript will appear here as you speak.' : 'Transcript will appear here...'}
+              disabled={isRecording}
+              sx={{
+                '& .MuiInputBase-root': {
+                  bgcolor: 'background.default',
+                  fontFamily: 'inherit',
+                  fontSize: '0.95rem',
+                  lineHeight: 1.7,
+                },
+                '& .MuiInputBase-input': {
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                },
+              }}
+              InputProps={{
+                endAdornment: isSaving ? (
+                  <InputAdornment position="end">
+                    <CircularProgress size={20} />
+                  </InputAdornment>
+                ) : null,
+              }}
+            />
+            {/* Debug info in development */}
+            {process.env.NODE_ENV === 'development' && (
+              <Box sx={{ mt: 2, p: 1, bgcolor: 'grey.100', borderRadius: 1, fontSize: '0.75rem' }}>
+                <Typography variant="caption" component="div">
+                  Debug: fullTranscript length: {fullTranscript.length}, transcript length: {transcript.length}
+                  <br />
+                  Session ID: {sessionId || 'None'}, Recording: {isRecording ? 'Yes' : 'No'}
+                </Typography>
+              </Box>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* MOM */}
       {mom && (

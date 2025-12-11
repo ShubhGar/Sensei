@@ -14,7 +14,9 @@ export const transcriptionAPI = {
   startSession: (title) => api.post('/api/transcribe/start', { title }),
   stopSession: (sessionId) => api.post(`/api/transcribe/stop/${sessionId}`),
   getSession: (sessionId) => api.get(`/api/transcribe/session/${sessionId}`),
+  getSessionDetails: (sessionId) => api.get(`/api/transcribe/session/${sessionId}/details`),
   getTranscript: (sessionId) => api.get(`/api/transcribe/transcript/${sessionId}`),
+  updateTranscript: (sessionId, transcript) => api.put(`/api/transcribe/transcript/${sessionId}`, { transcript }),
   listMeetings: () => api.get('/api/transcribe/meetings')
 }
 
@@ -25,7 +27,19 @@ export const aiAPI = {
       session_id: sessionId,
       include_faqs: includeFAQs,
       include_email_draft: includeEmailDraft
-    })
+    }),
+  getMeetingInsights: (sessionId) =>
+    api.post(`/api/ai/meeting-insights/${sessionId}`),
+  categorizeEmail: (emailContent, subject, sender) =>
+    api.post('/api/ai/categorize-email', null, {
+      params: { email_content: emailContent, subject, sender }
+    }),
+  chat: (query, context = null) =>
+    api.post('/api/ai/chat', { query, context }),
+  analyzeTrends: (limit = 10) =>
+    api.get('/api/ai/trends', { params: { limit } }),
+  semanticSearch: (query, limit = 10) =>
+    api.post('/api/ai/semantic-search', { query, limit })
 }
 
 // Email API
@@ -36,6 +50,10 @@ export const emailAPI = {
     }),
   suggestReply: (emailId) =>
     api.post(`/api/email/suggest-reply/${emailId}`),
+  summarizeEmail: (emailId) =>
+    api.post(`/api/email/summarize/${emailId}`),
+  generateTodos: (emailId) =>
+    api.post(`/api/email/generate-todos/${emailId}`),
   authenticate: (authCode) =>
     api.post('/api/email/authenticate', null, {
       params: { auth_code: authCode }

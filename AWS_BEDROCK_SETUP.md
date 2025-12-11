@@ -392,7 +392,7 @@ from app.services.bedrock_service import BedrockService
 # Update __init__ method
 def __init__(self):
     self.api_key = os.getenv("OPENAI_API_KEY")
-    self.model = os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
+    self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
     self.use_bedrock = os.getenv("USE_BEDROCK", "false").lower() == "true"
     
     # Initialize clients

@@ -222,7 +222,8 @@ Copy `.env.example` to `.env` and configure the following:
 - `DEEPGRAM_API_KEY` - Deepgram API key for cloud transcription (defaults to local Whisper)
 - `USE_DEEPGRAM` - Set to `"true"` to use Deepgram instead of local Whisper
 - `LOCAL_WHISPER_MODEL` - Whisper model size: `base`, `small`, `medium`, `large` (default: `base`)
-- `OPENAI_MODEL` - OpenAI model to use (default: `gpt-4-turbo-preview`)
+- `OPENAI_MODEL` - OpenAI model to use (default: `gpt-4o`)
+- `OPENAI_FALLBACK_MODEL` - Fallback OpenAI model if primary model is unavailable (default: `gpt-3.5-turbo`)
 
 #### AWS Bedrock (Alternative to OpenAI)
 - `USE_BEDROCK` - Set to `"true"` to use AWS Bedrock instead of OpenAI
