@@ -4,6 +4,7 @@ Email API routes
 from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List
 import logging
+import time
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import EmailSummary, AutoReplySuggestion, TodoItemCreate, TodoItemResponse
@@ -17,18 +18,66 @@ router = APIRouter()
 email_integration = EmailIntegration()
 ai_service = AIService()
 
+# Simple in-memory cache for inbox requests (TTL: 30 seconds)
+_inbox_cache = {}
+_cache_ttl = 30  # seconds
+
 
 @router.get("/inbox", response_model=EmailSummary)
 async def get_inbox(
     max_results: int = Query(50, ge=1, le=100),
-    unread_only: bool = Query(False)
+    unread_only: bool = Query(False),
+    include_sentiment: bool = Query(False, description="Include sentiment analysis"),
+    include_priority_score: bool = Query(False, description="Include priority scoring")
 ):
     """Get inbox summary with AI analysis"""
     try:
+        # Check cache first (only for basic requests without sentiment/priority)
+        cache_key = f"inbox_{max_results}_{unread_only}_{include_sentiment}_{include_priority_score}"
+        if not include_sentiment and not include_priority_score:
+            cached = _inbox_cache.get(cache_key)
+            if cached and (time.time() - cached["timestamp"]) < _cache_ttl:
+                logger.info(f"[Email] Returning cached inbox data (age: {time.time() - cached['timestamp']:.1f}s)")
+                return EmailSummary(**cached["data"])
+        
         logger.info(f"[Email] Getting inbox - max_results: {max_results}, unread_only: {unread_only}")
         
         emails = await email_integration.get_outlook_inbox(max_results, unread_only)
+        
+        # Enhance emails with sentiment and priority scoring if requested
+        if include_sentiment or include_priority_score:
+            for email in emails[:20]:  # Limit to 20 for performance
+                subject = email.get("subject", "")
+                body = email.get("body", "") or email.get("body_preview", "")
+                sender = email.get("sender", "")
+                received_at = email.get("received_at")
+                
+                if include_sentiment:
+                    try:
+                        sentiment = await ai_service.analyze_email_sentiment(body, subject)
+                        email["sentiment"] = sentiment
+                    except Exception as e:
+                        logger.warning(f"[Email] Error analyzing sentiment for email {email.get('id')}: {e}")
+                
+                if include_priority_score:
+                    try:
+                        priority = await ai_service.score_email_priority(body, subject, sender, received_at)
+                        email["priority_score"] = priority
+                    except Exception as e:
+                        logger.warning(f"[Email] Error scoring priority for email {email.get('id')}: {e}")
+        
         summary = await email_integration.analyze_inbox(emails, ai_service)
+        
+        # Cache the result if it's a basic request
+        if not include_sentiment and not include_priority_score:
+            _inbox_cache[cache_key] = {
+                "data": summary,
+                "timestamp": time.time()
+            }
+            # Clean old cache entries (keep only last 10)
+            if len(_inbox_cache) > 10:
+                oldest_key = min(_inbox_cache.keys(), key=lambda k: _inbox_cache[k]["timestamp"])
+                del _inbox_cache[oldest_key]
         
         logger.info(f"[Email] Successfully retrieved {len(emails)} emails from Outlook")
         return EmailSummary(**summary)

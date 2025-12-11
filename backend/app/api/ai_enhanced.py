@@ -1,15 +1,20 @@
 """
 Enhanced AI Processing API routes
 """
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
 import logging
 
 from app.models.schemas import (
     MeetingInsights, EmailCategorization, ChatMessage, ChatResponse,
-    TrendAnalysis, SemanticSearchRequest
+    TrendAnalysis, SemanticSearchRequest, EmailSentimentAnalysis,
+    EmailPriorityScore, TeamsConversationSummary, ChannelActivityAnalysis,
+    MentionAnalysis, CrossPlatformCorrelation, DailyDigest,
+    DeadlineRiskPrediction, TeamsResponseSuggestion, JiraIssue,
+    ConfluencePage, ToneOptimization, SmartNotifications
 )
 from app.database import get_db, MeetingSession, TodoItem
 from app.services.ai_service import AIService
@@ -182,30 +187,54 @@ async def chat_assistant(
             logger.warning(f"[Chat] Error loading Teams messages: {e}")
             context["teams"] = []
         
-        # Fetch todos from database
+        # Fetch todos from database - include both completed and incomplete
         try:
-            todos_result = await db.execute(
+            # First get incomplete todos (priority)
+            incomplete_todos_result = await db.execute(
                 select(TodoItem)
                 .where(TodoItem.is_completed == False)
                 .order_by(TodoItem.priority.desc(), TodoItem.created_at.desc())
-                .limit(20)
+                .limit(30)
             )
-            todos = todos_result.scalars().all()
+            incomplete_todos = incomplete_todos_result.scalars().all()
+            
+            # Also get recently completed todos (last 10)
+            completed_todos_result = await db.execute(
+                select(TodoItem)
+                .where(TodoItem.is_completed == True)
+                .order_by(TodoItem.completed_at.desc())
+                .limit(10)
+            )
+            completed_todos = completed_todos_result.scalars().all()
             
             todos_data = []
-            for todo in todos:
+            for todo in incomplete_todos:
                 todo_info = {
                     "id": todo.id,
                     "title": todo.title,
                     "description": todo.description or "",
                     "priority": todo.priority,
                     "source_type": todo.source_type,
+                    "is_completed": False,
                     "created_at": todo.created_at.isoformat() if todo.created_at else None
                 }
                 todos_data.append(todo_info)
             
+            for todo in completed_todos:
+                todo_info = {
+                    "id": todo.id,
+                    "title": todo.title,
+                    "description": todo.description or "",
+                    "priority": todo.priority,
+                    "source_type": todo.source_type,
+                    "is_completed": True,
+                    "created_at": todo.created_at.isoformat() if todo.created_at else None,
+                    "completed_at": todo.completed_at.isoformat() if todo.completed_at else None
+                }
+                todos_data.append(todo_info)
+            
             context["todos"] = todos_data
-            logger.info(f"[Chat] Loaded {len(todos_data)} todos for context")
+            logger.info(f"[Chat] Loaded {len(incomplete_todos)} incomplete and {len(completed_todos)} completed todos for context")
         except Exception as e:
             logger.warning(f"[Chat] Error loading todos: {e}")
             context["todos"] = []
@@ -328,4 +357,402 @@ async def semantic_search(
     except Exception as e:
         logger.error(f"Error in semantic search: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error in semantic search: {str(e)}")
+
+
+@router.post("/email/sentiment", response_model=EmailSentimentAnalysis)
+async def analyze_email_sentiment(
+    email_content: str = Query(..., description="Email content"),
+    subject: str = Query(..., description="Email subject")
+):
+    """Analyze email sentiment (frustration, urgency, positive/negative)"""
+    try:
+        sentiment = await ai_service.analyze_email_sentiment(email_content, subject)
+        return EmailSentimentAnalysis(**sentiment)
+    except Exception as e:
+        logger.error(f"Error analyzing email sentiment: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing sentiment: {str(e)}")
+
+
+@router.post("/email/priority-score", response_model=EmailPriorityScore)
+async def score_email_priority(
+    email_content: str = Query(..., description="Email content"),
+    subject: str = Query(..., description="Email subject"),
+    sender: str = Query(..., description="Email sender"),
+    received_at: Optional[str] = Query(None, description="Email received date")
+):
+    """Score email priority by importance (0-100)"""
+    try:
+        priority = await ai_service.score_email_priority(
+            email_content, subject, sender, received_at
+        )
+        return EmailPriorityScore(**priority)
+    except Exception as e:
+        logger.error(f"Error scoring email priority: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scoring priority: {str(e)}")
+
+
+class TeamsConversationRequest(BaseModel):
+    """Request for Teams conversation summary"""
+    messages: List[Dict[str, Any]]
+    thread_id: Optional[str] = None
+
+
+@router.post("/teams/conversation-summary", response_model=TeamsConversationSummary)
+async def summarize_teams_conversation(
+    request: TeamsConversationRequest
+):
+    """Generate thread-level summary for Teams conversation"""
+    try:
+        summary = await ai_service.summarize_teams_conversation(
+            request.messages, request.thread_id
+        )
+        return TeamsConversationSummary(**summary)
+    except Exception as e:
+        logger.error(f"Error summarizing Teams conversation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error summarizing conversation: {str(e)}")
+
+
+class ChannelActivityRequest(BaseModel):
+    """Request for channel activity analysis"""
+    messages: List[Dict[str, Any]]
+    channel_name: Optional[str] = None
+
+
+@router.post("/teams/channel-activity", response_model=ChannelActivityAnalysis)
+async def analyze_channel_activity(
+    request: ChannelActivityRequest
+):
+    """Analyze Teams channel activity for active discussions and blockers"""
+    try:
+        analysis = await ai_service.analyze_channel_activity(
+            request.messages, request.channel_name
+        )
+        return ChannelActivityAnalysis(**analysis)
+    except Exception as e:
+        logger.error(f"Error analyzing channel activity: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing channel: {str(e)}")
+
+
+class MentionAnalysisRequest(BaseModel):
+    """Request for mention analysis"""
+    messages: List[Dict[str, Any]]
+    user_email: Optional[str] = None
+
+
+@router.post("/teams/mentions", response_model=MentionAnalysis)
+async def analyze_mentions(
+    request: MentionAnalysisRequest
+):
+    """Analyze @mentions in Teams messages"""
+    try:
+        analysis = await ai_service.analyze_mentions(
+            request.messages, request.user_email
+        )
+        return MentionAnalysis(**analysis)
+    except Exception as e:
+        logger.error(f"Error analyzing mentions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing mentions: {str(e)}")
+
+
+class CorrelationRequest(BaseModel):
+    """Request for cross-platform correlation"""
+    emails: List[Dict[str, Any]] = []
+    teams_messages: List[Dict[str, Any]] = []
+
+
+@router.post("/correlate", response_model=CrossPlatformCorrelation)
+async def correlate_cross_platform(
+    request: CorrelationRequest
+):
+    """Correlate Teams discussions with related emails"""
+    try:
+        correlation = await ai_service.correlate_cross_platform(
+            request.emails, request.teams_messages
+        )
+        return CrossPlatformCorrelation(**correlation)
+    except Exception as e:
+        logger.error(f"Error correlating cross-platform: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error correlating: {str(e)}")
+
+
+@router.get("/digest/daily", response_model=DailyDigest)
+async def get_daily_digest(
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate daily digest combining emails + Teams activity"""
+    try:
+        # Fetch emails
+        emails = []
+        try:
+            emails = await email_integration.get_outlook_inbox(max_results=50, unread_only=False)
+        except Exception as e:
+            logger.warning(f"Error fetching emails for digest: {e}")
+        
+        # Fetch Teams messages
+        teams_messages = []
+        try:
+            teams_result = await teams_integration.get_chats(max_results=50)
+            teams_messages = teams_result.get("messages", [])
+        except Exception as e:
+            logger.warning(f"Error fetching Teams for digest: {e}")
+        
+        # Fetch todos
+        todos = []
+        try:
+            todos_result = await db.execute(
+                select(TodoItem)
+                .where(TodoItem.is_completed == False)
+                .order_by(TodoItem.created_at.desc())
+                .limit(50)
+            )
+            todos_list = todos_result.scalars().all()
+            todos = [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "created_at": t.created_at.isoformat() if t.created_at else None
+                }
+                for t in todos_list
+            ]
+        except Exception as e:
+            logger.warning(f"Error fetching todos for digest: {e}")
+        
+        # Fetch meetings
+        meetings = []
+        try:
+            meetings_result = await db.execute(
+                select(MeetingSession)
+                .order_by(MeetingSession.started_at.desc())
+                .limit(10)
+            )
+            meetings_list = meetings_result.scalars().all()
+            meetings = [
+                {
+                    "id": m.id,
+                    "title": m.title,
+                    "started_at": m.started_at.isoformat() if m.started_at else None
+                }
+                for m in meetings_list
+            ]
+        except Exception as e:
+            logger.warning(f"Error fetching meetings for digest: {e}")
+        
+        digest = await ai_service.generate_daily_digest(
+            emails, teams_messages, todos, meetings
+        )
+        return DailyDigest(**digest)
+    except Exception as e:
+        logger.error(f"Error generating daily digest: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating digest: {str(e)}")
+
+
+@router.get("/risks/deadlines", response_model=DeadlineRiskPrediction)
+async def predict_deadline_risks(
+    db: AsyncSession = Depends(get_db)
+):
+    """Predict deadline risks based on todos, emails, and meetings"""
+    try:
+        # Fetch todos
+        todos_result = await db.execute(
+            select(TodoItem)
+            .where(TodoItem.is_completed == False)
+            .order_by(TodoItem.priority.desc(), TodoItem.created_at.desc())
+            .limit(50)
+        )
+        todos_list = todos_result.scalars().all()
+        todos = [
+            {
+                "id": t.id,
+                "title": t.title,
+                "priority": t.priority,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "source_type": t.source_type
+            }
+            for t in todos_list
+        ]
+        
+        # Fetch emails
+        emails = []
+        try:
+            emails = await email_integration.get_outlook_inbox(max_results=20, unread_only=False)
+        except Exception as e:
+            logger.warning(f"Error fetching emails for risk prediction: {e}")
+        
+        # Fetch meetings
+        meetings = []
+        try:
+            meetings_result = await db.execute(
+                select(MeetingSession)
+                .order_by(MeetingSession.started_at.desc())
+                .limit(10)
+            )
+            meetings_list = meetings_result.scalars().all()
+            meetings = [
+                {
+                    "id": m.id,
+                    "title": m.title,
+                    "started_at": m.started_at.isoformat() if m.started_at else None
+                }
+                for m in meetings_list
+            ]
+        except Exception as e:
+            logger.warning(f"Error fetching meetings for risk prediction: {e}")
+        
+        risks = await ai_service.predict_deadline_risks(todos, emails, meetings)
+        return DeadlineRiskPrediction(**risks)
+    except Exception as e:
+        logger.error(f"Error predicting deadline risks: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error predicting risks: {str(e)}")
+
+
+class TeamsResponseRequest(BaseModel):
+    """Request for Teams response suggestion"""
+    message_content: str
+    conversation_context: Optional[List[Dict[str, Any]]] = None
+    tone: Optional[str] = None
+
+
+@router.post("/teams/suggest-response", response_model=TeamsResponseSuggestion)
+async def suggest_teams_response(
+    request: TeamsResponseRequest
+):
+    """Suggest polished Teams responses"""
+    try:
+        suggestion = await ai_service.suggest_teams_response(
+            request.message_content, request.conversation_context, request.tone
+        )
+        return TeamsResponseSuggestion(**suggestion)
+    except Exception as e:
+        logger.error(f"Error suggesting Teams response: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error suggesting response: {str(e)}")
+
+
+@router.post("/convert/jira", response_model=JiraIssue)
+async def convert_to_jira(
+    text: str = Query(..., description="Text to convert"),
+    issue_type: str = Query("Task", description="Jira issue type")
+):
+    """Convert text into Jira issue format"""
+    try:
+        jira_issue = await ai_service.convert_to_jira(text, issue_type)
+        return JiraIssue(**jira_issue)
+    except Exception as e:
+        logger.error(f"Error converting to Jira: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error converting to Jira: {str(e)}")
+
+
+@router.post("/convert/confluence", response_model=ConfluencePage)
+async def convert_to_confluence(
+    text: str = Query(..., description="Text to convert"),
+    page_type: str = Query("Documentation", description="Confluence page type")
+):
+    """Convert text into Confluence page format"""
+    try:
+        confluence_page = await ai_service.convert_to_confluence(text, page_type)
+        return ConfluencePage(**confluence_page)
+    except Exception as e:
+        logger.error(f"Error converting to Confluence: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error converting to Confluence: {str(e)}")
+
+
+@router.post("/optimize-tone", response_model=ToneOptimization)
+async def optimize_communication_tone(
+    text: str = Query(..., description="Text to optimize"),
+    target_audience: str = Query(..., description="Target audience"),
+    desired_tone: str = Query(..., description="Desired tone"),
+    context: Optional[str] = Query(None, description="Additional context")
+):
+    """Optimize communication tone for target audience"""
+    try:
+        optimization = await ai_service.optimize_communication_tone(
+            text, target_audience, desired_tone, context
+        )
+        return ToneOptimization(**optimization)
+    except Exception as e:
+        logger.error(f"Error optimizing tone: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error optimizing tone: {str(e)}")
+
+
+@router.get("/notifications/smart", response_model=SmartNotifications)
+async def get_smart_notifications(
+    db: AsyncSession = Depends(get_db)
+):
+    """Get smart notifications - only truly important items"""
+    try:
+        # Fetch emails
+        emails = []
+        try:
+            emails = await email_integration.get_outlook_inbox(max_results=50, unread_only=False)
+        except Exception as e:
+            logger.warning(f"Error fetching emails for notifications: {e}")
+        
+        # Fetch Teams messages
+        teams_messages = []
+        try:
+            teams_result = await teams_integration.get_chats(max_results=50)
+            teams_messages = teams_result.get("messages", [])
+        except Exception as e:
+            logger.warning(f"Error fetching Teams for notifications: {e}")
+        
+        # Fetch todos
+        todos = []
+        try:
+            todos_result = await db.execute(
+                select(TodoItem)
+                .where(TodoItem.is_completed == False)
+                .order_by(TodoItem.priority.desc(), TodoItem.created_at.desc())
+                .limit(50)
+            )
+            todos_list = todos_result.scalars().all()
+            todos = [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "is_completed": t.is_completed,
+                    "created_at": t.created_at.isoformat() if t.created_at else None
+                }
+                for t in todos_list
+            ]
+        except Exception as e:
+            logger.warning(f"Error fetching todos for notifications: {e}")
+        
+        # Fetch meetings
+        meetings = []
+        try:
+            meetings_result = await db.execute(
+                select(MeetingSession)
+                .order_by(MeetingSession.started_at.desc())
+                .limit(10)
+            )
+            meetings_list = meetings_result.scalars().all()
+            meetings = [
+                {
+                    "id": m.id,
+                    "title": m.title,
+                    "started_at": m.started_at.isoformat() if m.started_at else None
+                }
+                for m in meetings_list
+            ]
+        except Exception as e:
+            logger.warning(f"Error fetching meetings for notifications: {e}")
+        
+        notifications = await ai_service.generate_smart_notifications(
+            emails, teams_messages, todos, meetings
+        )
+        # Ensure the response matches the schema
+        try:
+            return SmartNotifications(**notifications)
+        except Exception as validation_error:
+            logger.error(f"Pydantic validation error for smart notifications: {validation_error}", exc_info=True)
+            # Return a safe fallback response
+            return SmartNotifications(
+                notifications=[],
+                total=0,
+                summary="Error generating notifications. Please try again."
+            )
+    except Exception as e:
+        logger.error(f"Error generating smart notifications: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating notifications: {str(e)}")
 

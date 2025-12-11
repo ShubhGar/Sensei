@@ -32,6 +32,7 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
 import { transcriptionAPI, aiAPI, emailAPI, teamsAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
 import ContextMenu from './ContextMenu'
+import UtilityTools from './UtilityTools'
 
 const Home = () => {
   const navigate = useNavigate()
@@ -48,6 +49,7 @@ const Home = () => {
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false)
   const [loadingMeetings, setLoadingMeetings] = useState(false)
   const [contextMenu, setContextMenu] = useState({ open: false, anchorEl: null, data: null })
+  const [utilityToolsOpen, setUtilityToolsOpen] = useState(false)
   
   // Theme-aware card background values
   const cardBackground = mode === 'dark' 
@@ -85,13 +87,23 @@ const Home = () => {
   const loadLatestMeetings = useCallback(async () => {
     setLoadingMeetings(true)
     try {
-      const response = await transcriptionAPI.listMeetings()
+      // Add timeout to prevent hanging - 5 seconds should be enough for local DB
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Request timeout')), 5000)
+      )
+      
+      const response = await Promise.race([
+        transcriptionAPI.listMeetings(),
+        timeoutPromise
+      ])
+      
       const meetings = response.data.meetings || []
       // Get the latest 2 meetings (assuming they're sorted by date, most recent first)
       const latest = meetings.slice(0, 2)
       setLatestMeetings(latest)
     } catch (err) {
       console.error('Error loading latest meetings:', err)
+      // Set empty array on error so UI doesn't show loading forever
       setLatestMeetings([])
     } finally {
       setLoadingMeetings(false)
@@ -872,6 +884,32 @@ const Home = () => {
           </Grid>
         )}
       </Grid>
+
+
+      {/* Utility Tools Button */}
+      <Box sx={{ mt: 4, textAlign: 'center' }}>
+        <Button
+          variant="outlined"
+          size="large"
+          onClick={() => setUtilityToolsOpen(true)}
+          sx={{
+            px: 4,
+            py: 1.5,
+            fontSize: '1rem',
+            fontWeight: 600,
+            textTransform: 'none',
+            borderRadius: 2,
+          }}
+        >
+          Open Utility Tools (Jira/Confluence/Tone Optimizer)
+        </Button>
+      </Box>
+
+      {/* Utility Tools Dialog */}
+      <UtilityTools
+        open={utilityToolsOpen}
+        onClose={() => setUtilityToolsOpen(false)}
+      />
 
       {/* Meeting Details Dialog */}
       <Dialog

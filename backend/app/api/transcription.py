@@ -162,12 +162,17 @@ async def stop_session(
             
             # Only update database if session exists (insights were generated)
             if session:
-                session.is_active = False
-                session.ended_at = datetime.utcnow()
-                session.full_transcript = merged_transcript
-                session.transcript = active_data.get("transcript_buffer", "")
-                await db.commit()
-                logger.info(f"[Transcription] Session {session_id} stopped and saved to DB (insights exist). Transcript length: {transcript_len}")
+                try:
+                    session.is_active = False
+                    session.ended_at = datetime.utcnow()
+                    session.full_transcript = merged_transcript
+                    session.transcript = active_data.get("transcript_buffer", "")
+                    await db.commit()
+                    logger.info(f"[Transcription] Session {session_id} stopped and saved to DB (insights exist). Transcript length: {transcript_len}")
+                except Exception as e:
+                    await db.rollback()
+                    logger.error(f"[Transcription] Failed to commit session stop: {e}", exc_info=True)
+                    raise
             else:
                 # Session not in DB means insights weren't generated - just remove from memory
                 logger.info(f"[Transcription] Session {session_id} stopped but not saved to DB (no insights). Transcript length: {transcript_len}, buffer: {buffer_len}")
@@ -179,9 +184,14 @@ async def stop_session(
             logger.warning(f"[Transcription] Session {session_id} not in active_sessions")
             if session:
                 # Session exists in DB but not in memory - mark as inactive
-                session.is_active = False
-                session.ended_at = datetime.utcnow()
-                await db.commit()
+                try:
+                    session.is_active = False
+                    session.ended_at = datetime.utcnow()
+                    await db.commit()
+                except Exception as e:
+                    await db.rollback()
+                    logger.error(f"[Transcription] Failed to commit session stop: {e}", exc_info=True)
+                    raise
     
     return {"status": "stopped", "session_id": session_id}
 
@@ -328,11 +338,16 @@ async def update_transcript(
     
     # Update database if session exists (insights were generated)
     if session:
-        session.full_transcript = request.transcript
-        session.transcript = request.transcript
-        await db.commit()
-        await db.refresh(session)
-        logger.info(f"[Transcription] Updated transcript for session {session_id} in DB and memory, length: {len(request.transcript)}")
+        try:
+            session.full_transcript = request.transcript
+            session.transcript = request.transcript
+            await db.commit()
+            await db.refresh(session)
+            logger.info(f"[Transcription] Updated transcript for session {session_id} in DB and memory, length: {len(request.transcript)}")
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"[Transcription] Failed to commit transcript update: {e}", exc_info=True)
+            raise
     else:
         logger.info(f"[Transcription] Updated transcript for session {session_id} in memory only, length: {len(request.transcript)}")
     
@@ -417,11 +432,16 @@ async def cleanup_meetings_without_insights(
         
         count = len(sessions_to_delete)
         if count > 0:
-            for session in sessions_to_delete:
-                await db.delete(session)
-            await db.commit()
-            logger.info(f"[Transcription] Deleted {count} meetings without insights")
-            return {"deleted": count, "message": f"Deleted {count} meeting(s) without insights"}
+            try:
+                for session in sessions_to_delete:
+                    db.delete(session)
+                await db.commit()
+                logger.info(f"[Transcription] Deleted {count} meetings without insights")
+                return {"deleted": count, "message": f"Deleted {count} meeting(s) without insights"}
+            except Exception as e:
+                await db.rollback()
+                logger.error(f"[Transcription] Failed to commit meeting cleanup: {e}", exc_info=True)
+                raise
         else:
             logger.info("[Transcription] No meetings without insights to delete")
             return {"deleted": 0, "message": "No meetings without insights to delete"}

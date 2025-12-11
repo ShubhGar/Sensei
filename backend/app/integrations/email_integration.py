@@ -120,9 +120,19 @@ class EmailIntegration:
         from app.api.auth import get_microsoft_token
         self.microsoft_token = await get_microsoft_token()
         
-        if not self.microsoft_token:
-            logger.warning("[Email] No authentication token available")
+        # Validate token - check for None, empty string, or whitespace
+        if not self.microsoft_token or not self.microsoft_token.strip():
+            logger.warning("[Email] No authentication token available (token is None or empty)")
             return []
+        
+        # Ensure token is properly formatted and not just whitespace
+        token_clean = self.microsoft_token.strip()
+        if len(token_clean) < 50:  # JWT tokens are typically much longer
+            logger.warning(f"[Email] Token appears to be invalid (too short: {len(token_clean)} chars)")
+            return []
+        
+        # Ensure token is properly formatted
+        auth_header = f"Bearer {token_clean}"
         
         try:
             url = "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages"
@@ -135,17 +145,37 @@ class EmailIntegration:
             if unread_only:
                 params["$filter"] = "isRead eq false"
             
-            async with httpx.AsyncClient() as client:
+            # Use a longer timeout for connection and read operations
+            timeout = httpx.Timeout(30.0, connect=15.0)
+            
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get(
                     url,
-                    headers={"Authorization": f"Bearer {self.microsoft_token}"},
-                    params=params,
-                    timeout=10.0
+                    headers={"Authorization": auth_header},
+                    params=params
                 )
                 
                 # If we get an auth error, return empty list
                 if response.status_code in [401, 403]:
-                    logger.warning(f"[Email] API returned authentication error status {response.status_code}")
+                    error_body = response.text
+                    try:
+                        error_json = response.json()
+                        error_code = error_json.get("error", {}).get("code", "")
+                        error_message = error_json.get("error", {}).get("message", "")
+                        if "No authorization information" in error_message or "authorization" in error_message.lower():
+                            logger.warning(
+                                f"[Email] Authentication token issue ({response.status_code}). The token may be invalid, expired, or missing Mail.Read permissions. "
+                                f"Please re-authenticate with Mail.Read or Mail.ReadWrite scopes. Error: {error_code} - {error_message}"
+                            )
+                        elif "Access is denied" in error_message or "ErrorAccessDenied" in error_code:
+                            logger.warning(
+                                f"[Email] Access denied ({response.status_code}). The token may not have Mail.Read permissions. "
+                                f"Please re-authenticate with Mail.Read or Mail.ReadWrite scopes. Error: {error_code} - {error_message}"
+                            )
+                        else:
+                            logger.warning(f"[Email] API returned authentication error status {response.status_code}: {error_code} - {error_message}")
+                    except:
+                        logger.warning(f"[Email] API returned authentication error status {response.status_code}: {error_body}")
                     return []
                 
                 # For other errors, raise exception to be handled by caller
@@ -192,6 +222,9 @@ class EmailIntegration:
                 
                 # Return emails (even if empty - empty is a valid response)
                 return emails
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException) as e:
+            logger.warning(f"[Email] Timeout connecting to Microsoft Graph API: {e}. Returning empty inbox.")
+            return []
         except httpx.HTTPStatusError as e:
             logger.error(f"[Email] HTTP error fetching Outlook inbox: {e}")
             raise
@@ -224,17 +257,18 @@ class EmailIntegration:
                 email["needs_approval"] = True
                 pending_approvals.append(email)
         
-        # Generate mailbox summary using AI (but not individual email summaries)
-        mailbox_summary = None
-        if ai_service:
-            try:
-                mailbox_summary = await ai_service.summarize_mailbox(emails)
-            except Exception as e:
-                logger.warning(f"[Email] Error generating mailbox summary: {e}")
-                # Fallback summary
-                unread_count = sum(1 for e in emails if not e.get("is_read", True))
-                urgent_count = len(urgent_emails)
-                mailbox_summary = f"Your mailbox has {len(emails)} emails with {unread_count} unread messages. {urgent_count} urgent items require immediate attention."
+        # Generate mailbox summary - use fast fallback instead of slow AI call for better performance
+        # AI summary can be generated on-demand if needed
+        unread_count = sum(1 for e in emails if not e.get("is_read", True))
+        urgent_count = len(urgent_emails)
+        mailbox_summary = f"Your mailbox has {len(emails)} emails with {unread_count} unread messages. {urgent_count} urgent items require immediate attention."
+        
+        # Optionally generate AI summary only if explicitly requested (skip for performance)
+        # if ai_service and len(emails) > 0:
+        #     try:
+        #         mailbox_summary = await ai_service.summarize_mailbox(emails)
+        #     except Exception as e:
+        #         logger.warning(f"[Email] Error generating mailbox summary: {e}")
         
         return {
             "total_emails": len(emails),

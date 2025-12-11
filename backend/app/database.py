@@ -41,7 +41,7 @@ class MicrosoftAuth(Base):
     expires_at = Column(DateTime, nullable=True)
     token_type = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=lambda: datetime.utcnow())
 
 
 class TodoItem(Base):
@@ -58,7 +58,7 @@ class TodoItem(Base):
     source_id = Column(String, nullable=True)  # ID of the source item
     source_data = Column(JSON, nullable=True)  # Additional context about the source
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=lambda: datetime.utcnow())
     completed_at = Column(DateTime, nullable=True)
 
 

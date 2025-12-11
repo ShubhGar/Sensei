@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal, MicrosoftAuth
@@ -103,10 +103,29 @@ async def microsoft_callback(
     
     try:
         # Decode state to get code_verifier (in production, use proper session storage)
-        code_verifier = base64.urlsafe_b64decode(state + '==').decode() if state else None
+        code_verifier = None
+        if state:
+            try:
+                # Add padding if needed for base64 decoding
+                padding = 4 - (len(state) % 4)
+                if padding != 4:
+                    state_padded = state + '=' * padding
+                else:
+                    state_padded = state
+                code_verifier = base64.urlsafe_b64decode(state_padded).decode()
+            except Exception as e:
+                logger.warning(f"Failed to decode state parameter: {e}")
+                code_verifier = None
         
         # Exchange authorization code for tokens
         token_url = f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}/oauth2/v2.0/token"
+        
+        if not MICROSOFT_CLIENT_SECRET:
+            logger.error("MICROSOFT_CLIENT_SECRET not configured")
+            return RedirectResponse(
+                url=f"{FRONTEND_URL}/auth/error?error=client_secret_not_configured",
+                status_code=302
+            )
         
         token_data = {
             "client_id": MICROSOFT_CLIENT_ID,
@@ -147,25 +166,30 @@ async def microsoft_callback(
                 )
                 auth_record = result.scalar_one_or_none()
                 
-                if auth_record:
-                    # Update existing record
-                    auth_record.access_token = token_response.get("access_token")
-                    auth_record.refresh_token = token_response.get("refresh_token")
-                    auth_record.expires_at = expires_at
-                    auth_record.token_type = token_response.get("token_type", "Bearer")
-                    auth_record.updated_at = datetime.utcnow()
-                else:
-                    # Create new record
-                    auth_record = MicrosoftAuth(
-                        user_id="default",
-                        access_token=token_response.get("access_token"),
-                        refresh_token=token_response.get("refresh_token"),
-                        expires_at=expires_at,
-                        token_type=token_response.get("token_type", "Bearer")
-                    )
-                    session.add(auth_record)
-                
-                await session.commit()
+                try:
+                    if auth_record:
+                        # Update existing record
+                        auth_record.access_token = token_response.get("access_token")
+                        auth_record.refresh_token = token_response.get("refresh_token")
+                        auth_record.expires_at = expires_at
+                        auth_record.token_type = token_response.get("token_type", "Bearer")
+                        auth_record.updated_at = datetime.utcnow()
+                    else:
+                        # Create new record
+                        auth_record = MicrosoftAuth(
+                            user_id="default",
+                            access_token=token_response.get("access_token"),
+                            refresh_token=token_response.get("refresh_token"),
+                            expires_at=expires_at,
+                            token_type=token_response.get("token_type", "Bearer")
+                        )
+                        session.add(auth_record)
+                    
+                    await session.commit()
+                except Exception as e:
+                    await session.rollback()
+                    logger.error(f"Failed to store OAuth tokens: {e}", exc_info=True)
+                    raise
             
             logger.info("Microsoft OAuth tokens stored successfully")
             
@@ -204,6 +228,10 @@ async def auth_status():
                 try:
                     token_url = f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}/oauth2/v2.0/token"
                     
+                    if not MICROSOFT_CLIENT_SECRET:
+                        logger.error("MICROSOFT_CLIENT_SECRET not configured for token refresh")
+                        return {"authenticated": False, "provider": "microsoft", "error": "client_secret_not_configured"}
+                    
                     async with httpx.AsyncClient() as client:
                         response = await client.post(
                             token_url,
@@ -222,18 +250,23 @@ async def auth_status():
                             expires_in = token_response.get("expires_in", 3600)
                             expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
                             
-                            auth_record.access_token = token_response.get("access_token")
-                            auth_record.refresh_token = token_response.get("refresh_token", auth_record.refresh_token)
-                            auth_record.expires_at = expires_at
-                            auth_record.updated_at = datetime.utcnow()
-                            
-                            await session.commit()
-                            
-                            return {
-                                "authenticated": True,
-                                "provider": "microsoft",
-                                "expires_at": expires_at.isoformat()
-                            }
+                            try:
+                                auth_record.access_token = token_response.get("access_token")
+                                auth_record.refresh_token = token_response.get("refresh_token", auth_record.refresh_token)
+                                auth_record.expires_at = expires_at
+                                auth_record.updated_at = datetime.utcnow()
+                                
+                                await session.commit()
+                                
+                                return {
+                                    "authenticated": True,
+                                    "provider": "microsoft",
+                                    "expires_at": expires_at.isoformat()
+                                }
+                            except Exception as e:
+                                await session.rollback()
+                                logger.error(f"Failed to commit token refresh: {e}", exc_info=True)
+                                return {"authenticated": False, "provider": "microsoft", "error": "token_refresh_failed"}
                 except Exception as e:
                     logger.error(f"Token refresh failed: {e}")
                     return {"authenticated": False, "provider": "microsoft", "error": "token_refresh_failed"}
@@ -254,14 +287,16 @@ async def microsoft_logout():
     """Logout and clear Microsoft tokens"""
     try:
         async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(MicrosoftAuth).where(MicrosoftAuth.user_id == "default")
-            )
-            auth_record = result.scalar_one_or_none()
-            
-            if auth_record:
-                await session.delete(auth_record)
+            try:
+                # Use delete statement for proper async support
+                result = await session.execute(
+                    delete(MicrosoftAuth).where(MicrosoftAuth.user_id == "default")
+                )
                 await session.commit()
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Failed to commit logout: {e}", exc_info=True)
+                raise
             
             return {"status": "logged_out", "provider": "microsoft"}
             
@@ -305,25 +340,30 @@ async def set_microsoft_token(token_input: TokenInput):
             )
             auth_record = result.scalar_one_or_none()
             
-            if auth_record:
-                # Update existing record
-                auth_record.access_token = access_token
-                auth_record.refresh_token = None  # Graph Explorer tokens don't have refresh tokens
-                auth_record.expires_at = expires_at
-                auth_record.token_type = "Bearer"
-                auth_record.updated_at = datetime.utcnow()
-            else:
-                # Create new record
-                auth_record = MicrosoftAuth(
-                    user_id="default",
-                    access_token=access_token,
-                    refresh_token=None,
-                    expires_at=expires_at,
-                    token_type="Bearer"
-                )
-                session.add(auth_record)
-            
-            await session.commit()
+            try:
+                if auth_record:
+                    # Update existing record
+                    auth_record.access_token = access_token
+                    auth_record.refresh_token = None  # Graph Explorer tokens don't have refresh tokens
+                    auth_record.expires_at = expires_at
+                    auth_record.token_type = "Bearer"
+                    auth_record.updated_at = datetime.utcnow()
+                else:
+                    # Create new record
+                    auth_record = MicrosoftAuth(
+                        user_id="default",
+                        access_token=access_token,
+                        refresh_token=None,
+                        expires_at=expires_at,
+                        token_type="Bearer"
+                    )
+                    session.add(auth_record)
+                
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Failed to commit token storage: {e}", exc_info=True)
+                raise
         
         logger.info("Microsoft token set successfully from Graph Explorer")
         
@@ -350,14 +390,25 @@ async def get_microsoft_token() -> Optional[str]:
             )
             auth_record = result.scalar_one_or_none()
             
-            if not auth_record or not auth_record.access_token:
+            if not auth_record:
+                logger.debug("[Auth] No Microsoft auth record found in database")
+                return None
+            
+            # Check if access_token exists and is not empty
+            if not auth_record.access_token or not auth_record.access_token.strip():
+                logger.warning("[Auth] Access token is None or empty in database")
                 return None
             
             # Check if token is expired
             if auth_record.expires_at and auth_record.expires_at < datetime.utcnow():
+                logger.info("[Auth] Access token expired, attempting refresh...")
                 # Token expired, try to refresh
                 if auth_record.refresh_token:
                     try:
+                        if not MICROSOFT_CLIENT_SECRET:
+                            logger.error("[Auth] MICROSOFT_CLIENT_SECRET not configured for token refresh")
+                            return None
+                        
                         token_url = f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}/oauth2/v2.0/token"
                         
                         async with httpx.AsyncClient() as client:
@@ -378,22 +429,45 @@ async def get_microsoft_token() -> Optional[str]:
                                 expires_in = token_response.get("expires_in", 3600)
                                 expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
                                 
-                                auth_record.access_token = token_response.get("access_token")
-                                auth_record.refresh_token = token_response.get("refresh_token", auth_record.refresh_token)
-                                auth_record.expires_at = expires_at
-                                auth_record.updated_at = datetime.utcnow()
+                                new_access_token = token_response.get("access_token")
+                                if not new_access_token or not new_access_token.strip():
+                                    logger.error("[Auth] Refreshed token is empty")
+                                    return None
                                 
-                                await session.commit()
-                                
-                                return auth_record.access_token
+                                try:
+                                    auth_record.access_token = new_access_token
+                                    auth_record.refresh_token = token_response.get("refresh_token", auth_record.refresh_token)
+                                    auth_record.expires_at = expires_at
+                                    auth_record.updated_at = datetime.utcnow()
+                                    
+                                    await session.commit()
+                                    
+                                    logger.info("[Auth] Token refreshed successfully")
+                                    return auth_record.access_token
+                                except Exception as e:
+                                    await session.rollback()
+                                    logger.error(f"[Auth] Failed to commit token refresh: {e}", exc_info=True)
+                                    return None
+                            else:
+                                logger.error(f"[Auth] Token refresh failed with status {response.status_code}: {response.text}")
+                                return None
                     except Exception as e:
-                        logger.error(f"Token refresh failed: {e}")
+                        logger.error(f"[Auth] Token refresh failed with exception: {e}", exc_info=True)
                         return None
+                else:
+                    logger.warning("[Auth] Token expired but no refresh token available")
+                    return None
+            
+            # Validate token format (should be a JWT-like string)
+            token = auth_record.access_token.strip()
+            if len(token) < 50:  # JWT tokens are typically much longer
+                logger.warning(f"[Auth] Token appears to be invalid (too short: {len(token)} chars)")
                 return None
             
-            return auth_record.access_token
+            logger.debug(f"[Auth] Returning valid token (expires at: {auth_record.expires_at})")
+            return token
             
     except Exception as e:
-        logger.error(f"Error getting Microsoft token: {e}", exc_info=True)
+        logger.error(f"[Auth] Error getting Microsoft token: {e}", exc_info=True)
         return None
 

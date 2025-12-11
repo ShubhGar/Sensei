@@ -375,18 +375,26 @@ class AIService:
             try:
                 return json.loads(fixed_content)
             except json.JSONDecodeError as e2:
-                # Log more context for debugging
-                error_pos = getattr(e2, 'pos', None)
-                if error_pos:
-                    start_debug = max(0, error_pos - 100)
-                    end_debug = min(len(fixed_content), error_pos + 100)
-                    context = fixed_content[start_debug:end_debug]
-                    raise ValueError(f"Invalid JSON response: {str(e2)}. Position: {error_pos}. Context: ...{context}...")
-                else:
-                    raise ValueError(f"Invalid JSON response: {str(e2)}. Content preview: {fixed_content[:500]}")
+                # Try one more fix: use regex to fix unescaped quotes in string values
+                # Pattern: "key": "value with "unescaped quotes" more text"
+                # We'll look for quotes that appear after a colon and space, within what looks like a string value
+                fixed_content_v2 = self._fix_unescaped_quotes_regex(fixed_content)
+                
+                try:
+                    return json.loads(fixed_content_v2)
+                except json.JSONDecodeError as e3:
+                    # Log more context for debugging
+                    error_pos = getattr(e3, 'pos', None)
+                    if error_pos:
+                        start_debug = max(0, error_pos - 100)
+                        end_debug = min(len(fixed_content_v2), error_pos + 100)
+                        context = fixed_content_v2[start_debug:end_debug]
+                        raise ValueError(f"Invalid JSON response: {str(e3)}. Position: {error_pos}. Context: ...{context}...")
+                    else:
+                        raise ValueError(f"Invalid JSON response: {str(e3)}. Content preview: {fixed_content_v2[:500]}")
     
     def _fix_json_strings(self, content: str) -> str:
-        """Fix JSON string values by properly escaping newlines and other special characters"""
+        """Fix JSON string values by properly escaping newlines, quotes, and other special characters"""
         result = []
         i = 0
         in_string = False
@@ -409,10 +417,34 @@ class AIService:
                 i += 1
                 continue
             
-            if char == '"' and not escape_next:
-                # Toggle string state
-                in_string = not in_string
-                result.append(char)
+            if char == '"':
+                if in_string:
+                    # We're inside a string - check if this quote should end the string
+                    # Look ahead past whitespace to see what comes next
+                    lookahead = i + 1
+                    while lookahead < len(content) and content[lookahead] in ' \t\n\r':
+                        lookahead += 1
+                    
+                    if lookahead < len(content):
+                        next_char = content[lookahead]
+                        # If next char is a JSON delimiter or another quote (new key), this ends the string
+                        # Delimiters: : (for key-value), , (separator), } (object end), ] (array end)
+                        # Also check for " which would start a new key
+                        if next_char in [':', ',', '}', ']', '"']:
+                            # This is the end of the string
+                            in_string = False
+                            result.append(char)
+                        else:
+                            # This is an unescaped quote within the string value - escape it
+                            result.append('\\"')
+                    else:
+                        # End of content - this is the end of the string
+                        in_string = False
+                        result.append(char)
+                else:
+                    # Start of a new string
+                    in_string = True
+                    result.append(char)
                 i += 1
                 continue
             
@@ -434,6 +466,78 @@ class AIService:
                     result.append(char)
             else:
                 # Outside string - keep as is
+                result.append(char)
+            
+            i += 1
+        
+        return ''.join(result)
+    
+    def _fix_unescaped_quotes_regex(self, content: str) -> str:
+        """Fix unescaped quotes in JSON string values using regex patterns"""
+        # This method handles cases where quotes appear in the middle of string values
+        # Pattern: "key": "value with "unescaped" quotes"
+        # We need to escape quotes that are inside string values but not at the boundaries
+        
+        result = []
+        i = 0
+        in_string = False
+        escape_next = False
+        string_start = -1
+        
+        while i < len(content):
+            char = content[i]
+            
+            if escape_next:
+                result.append(char)
+                escape_next = False
+                i += 1
+                continue
+            
+            if char == '\\':
+                result.append(char)
+                escape_next = True
+                i += 1
+                continue
+            
+            if char == '"':
+                if not in_string:
+                    # Starting a new string
+                    in_string = True
+                    string_start = i
+                    result.append(char)
+                else:
+                    # We're inside a string - check if this should end it
+                    # Look ahead to see what comes after whitespace
+                    j = i + 1
+                    while j < len(content) and content[j] in ' \t\n\r':
+                        j += 1
+                    
+                    if j >= len(content):
+                        # End of content - close the string
+                        in_string = False
+                        result.append(char)
+                    elif content[j] in [':', ',', '}', ']', '"']:
+                        # This quote is followed by a JSON delimiter or new key - it's the end of the string
+                        in_string = False
+                        result.append(char)
+                    else:
+                        # This quote is followed by a letter/number - it's an unescaped quote in the string
+                        # Escape it
+                        result.append('\\"')
+                i += 1
+                continue
+            
+            if in_string:
+                # Inside string - escape control characters
+                if char == '\n':
+                    result.append('\\n')
+                elif char == '\r':
+                    result.append('\\r')
+                elif char == '\t':
+                    result.append('\\t')
+                else:
+                    result.append(char)
+            else:
                 result.append(char)
             
             i += 1
@@ -1111,15 +1215,35 @@ Provide categorization in JSON format:
             # Add todos with details
             if context.get("todos"):
                 todos = context["todos"]
-                context_str += f"\n\n=== ACTIVE TODOS ({len(todos)} total) ===\n"
-                for i, todo in enumerate(todos[:10], 1):  # Limit to 10 most recent
-                    context_str += f"\nTodo {i}:\n"
-                    context_str += f"  Title: {todo.get('title', 'Untitled')}\n"
-                    if todo.get("description"):
-                        context_str += f"  Description: {todo['description'][:200]}\n"
-                    context_str += f"  Priority: {todo.get('priority', 'medium')}\n"
-                    if todo.get("source_type"):
-                        context_str += f"  Source: {todo['source_type']}\n"
+                # Separate completed and incomplete todos
+                incomplete_todos = [t for t in todos if not t.get("is_completed", False)]
+                completed_todos = [t for t in todos if t.get("is_completed", False)]
+                
+                if incomplete_todos:
+                    context_str += f"\n\n=== ACTIVE TODOS ({len(incomplete_todos)} incomplete) ===\n"
+                    for i, todo in enumerate(incomplete_todos[:20], 1):  # Show up to 20 incomplete todos
+                        context_str += f"\nTodo {i}:\n"
+                        context_str += f"  Title: {todo.get('title', 'Untitled')}\n"
+                        if todo.get("description"):
+                            context_str += f"  Description: {todo['description'][:200]}\n"
+                        context_str += f"  Priority: {todo.get('priority', 'medium')}\n"
+                        if todo.get("source_type"):
+                            context_str += f"  Source: {todo['source_type']}\n"
+                        if todo.get("created_at"):
+                            context_str += f"  Created: {todo['created_at']}\n"
+                
+                if completed_todos:
+                    context_str += f"\n\n=== COMPLETED TODOS ({len(completed_todos)} recent) ===\n"
+                    for i, todo in enumerate(completed_todos[:10], 1):  # Show up to 10 recently completed
+                        context_str += f"\nCompleted Todo {i}:\n"
+                        context_str += f"  Title: {todo.get('title', 'Untitled')}\n"
+                        if todo.get("description"):
+                            context_str += f"  Description: {todo['description'][:200]}\n"
+                        context_str += f"  Priority: {todo.get('priority', 'medium')}\n"
+                        if todo.get("completed_at"):
+                            context_str += f"  Completed: {todo['completed_at']}\n"
+            else:
+                context_str += f"\n\n=== TODOS ===\nNo todos found in the system."
         
         prompt = f"""You are an AI assistant helping users understand their meetings, emails, and work communications.
 
@@ -1131,9 +1255,12 @@ User Question: {query}
 Instructions:
 - Use the provided context to answer the user's question accurately
 - Reference specific meetings, emails, messages, or todos by name/title when relevant
+- If the user asks about todos, list ALL todos from the context (both active and completed if they ask for "all todos")
+- When listing todos, organize them by priority (critical > high > medium > low) and show their titles, descriptions, and priorities
 - If the user asks about something not in the context, say so clearly
 - Provide actionable insights when possible
 - Be concise but thorough
+- If there are no todos and the user asks about them, clearly state that there are no todos in the system
 
 Return JSON:
 {{
@@ -1155,16 +1282,60 @@ Return JSON:
                 response_format={"type": "json_object"}
             )
             
-            return self._parse_json_response(content)
-        except Exception as e:
+            parsed_response = self._parse_json_response(content)
+            
+            # Validate required fields
+            if not parsed_response.get("answer"):
+                logger.warning("AI response missing 'answer' field, using fallback")
+                parsed_response["answer"] = "I received a response but it was incomplete. Please try rephrasing your question."
+            
+            if "confidence" not in parsed_response:
+                parsed_response["confidence"] = 0.5  # Default confidence if missing
+            
+            return parsed_response
+        except json.JSONDecodeError as e:
             logger.error(
-                f"Error in chat assistant | Error: {type(e).__name__}: {str(e)}",
+                f"JSON parsing error in chat assistant | Error: {type(e).__name__}: {str(e)} | Content preview: {str(content)[:500] if 'content' in locals() else 'N/A'}",
                 exc_info=True
             )
             return {
-                "answer": "I encountered an error processing your question. Please try again.",
+                "answer": "I encountered an error parsing the response. Please try rephrasing your question.",
                 "confidence": 0.0,
-                "sources": []
+                "sources": [],
+                "follow_up_questions": ["Can you rephrase your question?", "What specific information are you looking for?"]
+            }
+        except ValueError as e:
+            logger.error(
+                f"Value error in chat assistant | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "answer": f"I encountered an error: {str(e)}. Please try again.",
+                "confidence": 0.0,
+                "sources": [],
+                "follow_up_questions": ["Can you rephrase your question?"]
+            }
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(
+                f"Error in chat assistant | Error: {type(e).__name__}: {error_msg}",
+                exc_info=True
+            )
+            # Provide more helpful error message
+            if "quota" in error_msg.lower() or "billing" in error_msg.lower():
+                error_response = "AI service quota exceeded. Please check your API billing settings."
+            elif "rate limit" in error_msg.lower():
+                error_response = "AI service rate limit exceeded. Please wait a moment and try again."
+            elif "not available" in error_msg.lower() or "not configured" in error_msg.lower():
+                error_response = "AI service is not available. Please check your configuration."
+            else:
+                error_response = f"I encountered an error processing your question: {error_msg[:200]}. Please try again."
+            
+            return {
+                "answer": error_response,
+                "confidence": 0.0,
+                "sources": [],
+                "follow_up_questions": ["Can you rephrase your question?", "What would you like to know about your todos, meetings, or emails?"]
             }
     
     async def analyze_trends(
@@ -1425,5 +1596,987 @@ Return JSON format:
             return "low"
         else:
             return "medium"
+    
+    async def analyze_email_sentiment(self, email_content: str, subject: str) -> Dict[str, Any]:
+        """Analyze email sentiment (frustration, urgency, positive/negative)"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "sentiment": "neutral",
+                "sentiment_score": 0.5,
+                "urgency_detected": False,
+                "frustration_detected": False,
+                "tone": "neutral"
+            }
+        
+        prompt = f"""Analyze the sentiment and emotional tone of the following email.
+
+Subject: {subject}
+Content: {email_content[:2000]}
+
+Provide analysis in JSON format:
+{{
+    "sentiment": "positive|neutral|negative|frustrated|urgent",
+    "sentiment_score": 0.0-1.0,
+    "urgency_detected": true|false,
+    "frustration_detected": true|false,
+    "tone": "professional|casual|formal|friendly|stern|apologetic",
+    "emotional_markers": ["marker1", "marker2", ...],
+    "recommended_response_tone": "professional|empathetic|concise|detailed"
+}}"""
+
+        system_prompt = "You are an expert at analyzing email sentiment and emotional tone."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.2,
+                max_tokens=1024,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error analyzing email sentiment | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "sentiment": "neutral",
+                "sentiment_score": 0.5,
+                "urgency_detected": False,
+                "frustration_detected": False,
+                "tone": "neutral"
+            }
+    
+    async def score_email_priority(
+        self,
+        email_content: str,
+        subject: str,
+        sender: str,
+        received_at: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Score email priority by importance (0-100)"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "priority_score": 50,
+                "priority_level": "medium",
+                "factors": []
+            }
+        
+        prompt = f"""Score the priority of this email on a scale of 0-100, where:
+- 0-30: Low priority (informational, newsletters, non-urgent)
+- 31-60: Medium priority (normal business communication)
+- 61-80: High priority (action required, deadlines, important decisions)
+- 81-100: Critical priority (urgent, blocking, executive communication, emergencies)
+
+Subject: {subject}
+From: {sender}
+Content: {email_content[:2000]}
+Received: {received_at or "Unknown"}
+
+Return JSON:
+{{
+    "priority_score": 0-100,
+    "priority_level": "low|medium|high|critical",
+    "factors": ["factor1", "factor2", ...],
+    "reasoning": "..."
+}}"""
+
+        system_prompt = "You are an expert at prioritizing emails based on importance, urgency, and business impact."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.2,
+                max_tokens=1024,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error scoring email priority | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "priority_score": 50,
+                "priority_level": "medium",
+                "factors": []
+            }
+    
+    async def summarize_teams_conversation(
+        self,
+        messages: List[Dict[str, Any]],
+        thread_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Generate thread-level summary for Teams conversation"""
+        if (not self.client and not self.bedrock_service) or not messages:
+            return {
+                "summary": "No summary available",
+                "key_points": [],
+                "action_items": [],
+                "decisions": []
+            }
+        
+        # Prepare conversation context
+        conversation_text = []
+        for msg in messages[:50]:  # Limit to 50 messages
+            sender = msg.get("sender", "Unknown")
+            content = msg.get("content", "")[:500]
+            sent_at = msg.get("sent_at", "")
+            conversation_text.append(f"[{sent_at}] {sender}: {content}")
+        
+        conversation_context = "\n".join(conversation_text)
+        
+        prompt = f"""Summarize the following Teams conversation thread.
+
+Conversation:
+{conversation_context}
+
+Provide a comprehensive summary in JSON format:
+{{
+    "summary": "2-3 sentence summary of the conversation",
+    "key_points": ["point1", "point2", ...],
+    "action_items": [{{"task": "...", "owner": "...", "deadline": "..."}}],
+    "decisions": ["decision1", "decision2", ...],
+    "participants": ["participant1", "participant2", ...],
+    "topic": "main topic discussed"
+}}"""
+
+        system_prompt = "You are an expert at summarizing Teams conversations and extracting key information."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            result = self._parse_json_response(content)
+            if thread_id:
+                result["thread_id"] = thread_id
+            return result
+        except Exception as e:
+            logger.error(
+                f"Error summarizing Teams conversation | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "summary": "Error generating summary",
+                "key_points": [],
+                "action_items": [],
+                "decisions": []
+            }
+    
+    async def analyze_channel_activity(
+        self,
+        messages: List[Dict[str, Any]],
+        channel_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Analyze Teams channel activity for active discussions and blockers"""
+        if (not self.client and not self.bedrock_service) or not messages:
+            return {
+                "active_discussions": [],
+                "blockers": [],
+                "activity_level": "low",
+                "top_contributors": []
+            }
+        
+        # Prepare channel context
+        channel_text = []
+        contributors = {}
+        for msg in messages[:100]:  # Limit to 100 messages
+            sender = msg.get("sender", "Unknown")
+            content = msg.get("content", "")[:300]
+            channel_text.append(f"{sender}: {content}")
+            contributors[sender] = contributors.get(sender, 0) + 1
+        
+        channel_context = "\n".join(channel_text)
+        top_contributors = sorted(contributors.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        prompt = f"""Analyze the following Teams channel activity.
+
+Channel: {channel_name or "Unknown"}
+Messages:
+{channel_context}
+
+Identify:
+1. Active discussions (ongoing conversations)
+2. Blockers (issues preventing progress)
+3. Activity level (high/medium/low)
+4. Key topics being discussed
+
+Return JSON:
+{{
+    "active_discussions": [
+        {{"topic": "...", "participants": ["..."], "message_count": N}}
+    ],
+    "blockers": [
+        {{"issue": "...", "impact": "...", "suggested_action": "..."}}
+    ],
+    "activity_level": "high|medium|low",
+    "top_contributors": ["contributor1", "contributor2", ...],
+    "key_topics": ["topic1", "topic2", ...]
+}}"""
+
+        system_prompt = "You are an expert at analyzing Teams channel activity and identifying blockers."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            result = self._parse_json_response(content)
+            result["top_contributors"] = [name for name, _ in top_contributors]
+            return result
+        except Exception as e:
+            logger.error(
+                f"Error analyzing channel activity | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "active_discussions": [],
+                "blockers": [],
+                "activity_level": "low",
+                "top_contributors": [name for name, _ in top_contributors]
+            }
+    
+    async def analyze_mentions(
+        self,
+        messages: List[Dict[str, Any]],
+        user_email: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Analyze @mentions in Teams messages"""
+        if not messages:
+            return {
+                "mentions": [],
+                "unanswered_mentions": [],
+                "requires_response": []
+            }
+        
+        mentions = []
+        for msg in messages:
+            content = msg.get("content", "")
+            # Check for @mentions (simple pattern matching)
+            if "@" in content:
+                # Extract potential mentions
+                import re
+                mention_pattern = r'@(\w+(?:\.\w+)*)'
+                found_mentions = re.findall(mention_pattern, content)
+                for mention in found_mentions:
+                    mentions.append({
+                        "message_id": msg.get("message_id", ""),
+                        "sender": msg.get("sender", ""),
+                        "content": content[:200],
+                        "mentioned": mention,
+                        "sent_at": msg.get("sent_at", ""),
+                        "is_read": msg.get("is_read", False)
+                    })
+        
+        # If user_email provided, filter for mentions of that user
+        if user_email:
+            user_name = user_email.split("@")[0]
+            user_mentions = [
+                m for m in mentions
+                if user_name.lower() in m["mentioned"].lower() or
+                   user_email.lower() in m["content"].lower()
+            ]
+        else:
+            user_mentions = mentions
+        
+        # Identify unanswered mentions (unread or recent)
+        unanswered = [m for m in user_mentions if not m.get("is_read", True)]
+        
+        return {
+            "mentions": mentions,
+            "unanswered_mentions": unanswered,
+            "requires_response": unanswered[:10]  # Top 10 requiring response
+        }
+    
+    async def correlate_cross_platform(
+        self,
+        emails: List[Dict[str, Any]],
+        teams_messages: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Correlate Teams discussions with related emails"""
+        if (not self.client and not self.bedrock_service) or (not emails and not teams_messages):
+            return {
+                "correlations": [],
+                "related_items": []
+            }
+        
+        # Prepare summaries
+        email_summaries = []
+        for email in emails[:20]:
+            email_summaries.append({
+                "id": email.get("id", ""),
+                "subject": email.get("subject", ""),
+                "sender": email.get("sender", ""),
+                "preview": email.get("body_preview", "")[:200]
+            })
+        
+        teams_summaries = []
+        for msg in teams_messages[:20]:
+            teams_summaries.append({
+                "id": msg.get("message_id", ""),
+                "sender": msg.get("sender", ""),
+                "content": msg.get("content", "")[:200]
+            })
+        
+        prompt = f"""Identify correlations between the following emails and Teams messages.
+Find items that discuss the same topic, project, or issue.
+
+Emails:
+{json.dumps(email_summaries, indent=2)}
+
+Teams Messages:
+{json.dumps(teams_summaries, indent=2)}
+
+Return JSON:
+{{
+    "correlations": [
+        {{
+            "type": "email-teams",
+            "email_id": "...",
+            "teams_id": "...",
+            "topic": "...",
+            "confidence": 0.0-1.0,
+            "reasoning": "..."
+        }}
+    ],
+    "related_items": [
+        {{
+            "items": ["email_id1", "teams_id1"],
+            "topic": "...",
+            "summary": "..."
+        }}
+    ]
+}}"""
+
+        system_prompt = "You are an expert at finding relationships between emails and Teams conversations."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error correlating cross-platform | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "correlations": [],
+                "related_items": []
+            }
+    
+    async def generate_daily_digest(
+        self,
+        emails: List[Dict[str, Any]],
+        teams_messages: List[Dict[str, Any]],
+        todos: List[Dict[str, Any]],
+        meetings: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Generate daily digest combining emails + Teams activity"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "summary": "Daily digest unavailable",
+                "highlights": [],
+                "action_items": [],
+                "urgent_items": []
+            }
+        
+        # Prepare summaries
+        email_summary = f"Emails: {len(emails)} total, {sum(1 for e in emails if not e.get('is_read', True))} unread"
+        teams_summary = f"Teams: {len(teams_messages)} messages, {sum(1 for m in teams_messages if not m.get('is_read', True))} unread"
+        todos_summary = f"Todos: {len(todos)} active, {sum(1 for t in todos if t.get('priority') == 'critical')} critical"
+        meetings_summary = f"Meetings: {len(meetings)} recent"
+        
+        prompt = f"""Generate a comprehensive daily digest combining all work communications and activities.
+
+{email_summary}
+{teams_summary}
+{todos_summary}
+{meetings_summary}
+
+Create a digest that:
+1. Highlights the most important items
+2. Lists urgent/action items
+3. Identifies dependencies ("who you're waiting on")
+4. Provides recommendations
+
+Return JSON:
+{{
+    "summary": "Overall summary of the day",
+    "highlights": ["highlight1", "highlight2", ...],
+    "action_items": [
+        {{"item": "...", "source": "email|teams|meeting", "priority": "..."}}
+    ],
+    "urgent_items": ["item1", "item2", ...],
+    "dependencies": [
+        {{"waiting_on": "...", "item": "...", "deadline": "..."}}
+    ],
+    "recommendations": ["recommendation1", "recommendation2", ...]
+}}"""
+
+        system_prompt = "You are an expert at creating comprehensive daily work digests."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.4,
+                max_tokens=3072,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error generating daily digest | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "summary": "Error generating digest",
+                "highlights": [],
+                "action_items": [],
+                "urgent_items": []
+            }
+    
+    async def predict_deadline_risks(
+        self,
+        todos: List[Dict[str, Any]],
+        emails: List[Dict[str, Any]],
+        meetings: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Predict deadline risks based on todos, emails, and meetings"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "at_risk": [],
+                "warnings": [],
+                "recommendations": []
+            }
+        
+        # Prepare context
+        todos_context = []
+        for todo in todos[:20]:
+            todos_context.append({
+                "title": todo.get("title", ""),
+                "priority": todo.get("priority", "medium"),
+                "created_at": todo.get("created_at", ""),
+                "source": todo.get("source_type", "")
+            })
+        
+        prompt = f"""Analyze the following todos and predict deadline risks.
+
+Todos:
+{json.dumps(todos_context, indent=2)}
+
+Identify:
+1. Items at risk of missing deadlines
+2. Items that need attention soon
+3. Dependencies that might cause delays
+
+Return JSON:
+{{
+    "at_risk": [
+        {{
+            "item": "...",
+            "risk_level": "high|medium|low",
+            "reason": "...",
+            "suggested_action": "..."
+        }}
+    ],
+    "warnings": [
+        {{
+            "item": "...",
+            "warning": "...",
+            "deadline": "..."
+        }}
+    ],
+    "recommendations": ["recommendation1", "recommendation2", ...]
+}}"""
+
+        system_prompt = "You are an expert at predicting deadline risks and project management."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error predicting deadline risks | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "at_risk": [],
+                "warnings": [],
+                "recommendations": []
+            }
+    
+    async def suggest_teams_response(
+        self,
+        message_content: str,
+        conversation_context: Optional[List[Dict[str, Any]]] = None,
+        tone: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Suggest polished Teams responses"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "suggested_response": "Thank you for your message.",
+                "tone": "professional",
+                "confidence": 0.5
+            }
+        
+        # Prepare conversation context
+        context_text = ""
+        if conversation_context:
+            for msg in conversation_context[-5:]:  # Last 5 messages
+                sender = msg.get("sender", "Unknown")
+                content = msg.get("content", "")[:200]
+                context_text += f"{sender}: {content}\n"
+        
+        prompt = f"""Suggest a polished, professional Teams response.
+
+Message to respond to:
+{message_content}
+
+Conversation context:
+{context_text or "No additional context"}
+
+Tone preference: {tone or "professional"}
+
+Return JSON:
+{{
+    "suggested_response": "...",
+    "tone": "professional|casual|empathetic|concise",
+    "confidence": 0.0-1.0,
+    "alternatives": ["alternative1", "alternative2"]
+}}"""
+
+        system_prompt = "You are an expert at crafting professional Teams responses."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.5,
+                max_tokens=1024,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error suggesting Teams response | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "suggested_response": "",
+                "tone": "professional",
+                "confidence": 0.0
+            }
+    
+    async def convert_to_jira(
+        self,
+        text: str,
+        issue_type: str = "Task"
+    ) -> Dict[str, Any]:
+        """Convert text into Jira issue format"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "title": text[:100],
+                "description": text,
+                "issue_type": issue_type
+            }
+        
+        prompt = f"""Convert the following text into a Jira issue format.
+
+Text:
+{text[:2000]}
+
+Issue Type: {issue_type}
+
+Return JSON:
+{{
+    "title": "Issue title (max 255 chars)",
+    "description": "Detailed description",
+    "issue_type": "{issue_type}",
+    "priority": "Highest|High|Medium|Low|Lowest",
+    "labels": ["label1", "label2", ...],
+    "components": ["component1", "component2", ...],
+    "acceptance_criteria": ["criterion1", "criterion2", ...]
+}}"""
+
+        system_prompt = "You are an expert at converting text into Jira issue format."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error converting to Jira | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "title": text[:100],
+                "description": text,
+                "issue_type": issue_type
+            }
+    
+    async def convert_to_confluence(
+        self,
+        text: str,
+        page_type: str = "Documentation"
+    ) -> Dict[str, Any]:
+        """Convert text into Confluence page format"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "title": text[:100],
+                "content": text,
+                "page_type": page_type
+            }
+        
+        prompt = f"""Convert the following text into a Confluence page format.
+
+Text:
+{text[:2000]}
+
+Page Type: {page_type}
+
+Return JSON:
+{{
+    "title": "Page title",
+    "content": "Formatted content (can include Confluence markup)",
+    "page_type": "{page_type}",
+    "labels": ["label1", "label2", ...],
+    "sections": [
+        {{"heading": "...", "content": "..."}}
+    ]
+}}"""
+
+        system_prompt = "You are an expert at converting text into Confluence page format."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error converting to Confluence | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "title": text[:100],
+                "content": text,
+                "page_type": page_type
+            }
+    
+    async def optimize_communication_tone(
+        self,
+        text: str,
+        target_audience: str,
+        desired_tone: str,
+        context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Optimize communication tone for target audience"""
+        if not self.client and not self.bedrock_service:
+            return {
+                "optimized_text": text,
+                "tone": desired_tone,
+                "changes": []
+            }
+        
+        prompt = f"""Optimize the following communication for tone and audience.
+
+Original text:
+{text[:2000]}
+
+Target audience: {target_audience}
+Desired tone: {desired_tone}
+Context: {context or "No additional context"}
+
+Return JSON:
+{{
+    "optimized_text": "Optimized version of the text",
+    "tone": "{desired_tone}",
+    "changes": [
+        {{"original": "...", "optimized": "...", "reason": "..."}}
+    ],
+    "tone_score": 0.0-1.0,
+    "recommendations": ["recommendation1", "recommendation2", ...]
+}}"""
+
+        system_prompt = "You are an expert at optimizing communication tone for different audiences."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.4,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            return self._parse_json_response(content)
+        except Exception as e:
+            logger.error(
+                f"Error optimizing tone | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            return {
+                "optimized_text": text,
+                "tone": desired_tone,
+                "changes": []
+            }
+    
+    async def generate_smart_notifications(
+        self,
+        emails: List[Dict[str, Any]],
+        teams_messages: List[Dict[str, Any]],
+        todos: List[Dict[str, Any]],
+        meetings: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Generate smart notifications - only alert on truly important items"""
+        if not self.client and not self.bedrock_service:
+            # Fallback: simple filtering - ensure all required fields are present
+            urgent_emails = [e for e in emails if e.get("is_urgent", False)][:5]
+            urgent_teams = [m for m in teams_messages if m.get("is_urgent", False)][:5]
+            critical_todos = [t for t in todos if t.get("priority") == "critical"][:5]
+            
+            notifications = []
+            for e in urgent_emails:
+                notifications.append({
+                    "type": "email",
+                    "item_id": str(e.get("id", "")),
+                    "priority": "high",
+                    "reason": "Urgent email requiring immediate attention",
+                    "action_required": True,
+                    "urgency_score": 0.8,
+                    "item": e
+                })
+            
+            for m in urgent_teams:
+                notifications.append({
+                    "type": "teams",
+                    "item_id": str(m.get("message_id", "") or m.get("id", "")),
+                    "priority": "high",
+                    "reason": "Urgent Teams message requiring immediate attention",
+                    "action_required": True,
+                    "urgency_score": 0.8,
+                    "item": m
+                })
+            
+            for t in critical_todos:
+                notifications.append({
+                    "type": "todo",
+                    "item_id": str(t.get("id", "")),
+                    "priority": "critical",
+                    "reason": "Critical todo item with high priority",
+                    "action_required": True,
+                    "urgency_score": 0.9,
+                    "item": t
+                })
+            
+            return {
+                "notifications": notifications,
+                "total": len(notifications),
+                "summary": f"{len(notifications)} urgent items requiring attention"
+            }
+        
+        # Prepare summaries
+        email_summaries = []
+        for email in emails[:30]:
+            email_summaries.append({
+                "id": email.get("id", ""),
+                "subject": email.get("subject", ""),
+                "sender": email.get("sender", ""),
+                "is_read": email.get("is_read", True),
+                "is_urgent": email.get("is_urgent", False),
+                "preview": email.get("body_preview", "")[:200]
+            })
+        
+        teams_summaries = []
+        for msg in teams_messages[:30]:
+            teams_summaries.append({
+                "id": msg.get("message_id", ""),
+                "sender": msg.get("sender", ""),
+                "is_read": msg.get("is_read", True),
+                "is_urgent": msg.get("is_urgent", False),
+                "content": msg.get("content", "")[:200]
+            })
+        
+        todos_summaries = []
+        for todo in todos[:30]:
+            todos_summaries.append({
+                "id": todo.get("id", ""),
+                "title": todo.get("title", ""),
+                "priority": todo.get("priority", "medium"),
+                "is_completed": todo.get("is_completed", False)
+            })
+        
+        prompt = f"""Analyze the following items and identify ONLY truly important items that warrant notifications.
+Do NOT notify on routine, informational, or low-priority items.
+
+Emails:
+{json.dumps(email_summaries, indent=2)}
+
+Teams Messages:
+{json.dumps(teams_summaries, indent=2)}
+
+Todos:
+{json.dumps(todos_summaries, indent=2)}
+
+Return JSON with only items that are:
+- Urgent and require immediate action
+- Critical deadlines or blockers
+- Executive/important stakeholder communications
+- Items the user is explicitly waiting on
+
+Return JSON:
+{{
+    "notifications": [
+        {{
+            "type": "email|teams|todo",
+            "item_id": "...",
+            "priority": "critical|high",
+            "reason": "Why this needs notification",
+            "action_required": true|false,
+            "urgency_score": 0.0-1.0
+        }}
+    ],
+    "total": N,
+    "summary": "Brief summary of notifications"
+}}"""
+
+        system_prompt = "You are an expert at filtering notifications to only show truly important items that require user attention."
+
+        try:
+            content = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.2,
+                max_tokens=2048,
+                response_format={"type": "json_object"}
+            )
+            
+            result = self._parse_json_response(content)
+            # Map back to full items
+            notifications = []
+            for notif in result.get("notifications", []):
+                # Always convert item_id to string (AI might return it as integer)
+                item_id_raw = notif.get("item_id", "")
+                item_id = str(item_id_raw) if item_id_raw is not None else ""
+                notif_type = notif.get("type", "")
+                
+                # Find the full item
+                full_item = None
+                if notif_type == "email":
+                    full_item = next((e for e in emails if e.get("id") == item_id), None)
+                elif notif_type == "teams":
+                    full_item = next((m for m in teams_messages if m.get("message_id") == item_id or m.get("id") == item_id), None)
+                elif notif_type == "todo":
+                    full_item = next((t for t in todos if str(t.get("id")) == str(item_id)), None)
+                
+                # Ensure all required fields are present - item_id must be a string
+                notification = {
+                    "type": notif_type,
+                    "item_id": item_id,  # Already converted to string above
+                    "priority": notif.get("priority", "high"),
+                    "reason": notif.get("reason", "Requires attention"),
+                    "action_required": notif.get("action_required", True),
+                    "urgency_score": notif.get("urgency_score"),
+                    "item": full_item
+                }
+                
+                if full_item or item_id:  # Only add if we have an item or item_id
+                    notifications.append(notification)
+            
+            result["notifications"] = notifications
+            result["total"] = len(notifications)
+            if "summary" not in result:
+                result["summary"] = f"{len(notifications)} important items require attention"
+            return result
+        except Exception as e:
+            logger.error(
+                f"Error generating smart notifications | Error: {type(e).__name__}: {str(e)}",
+                exc_info=True
+            )
+            # Fallback - ensure all required fields are present
+            urgent_emails = [e for e in emails if e.get("is_urgent", False)][:5]
+            urgent_teams = [m for m in teams_messages if m.get("is_urgent", False)][:5]
+            critical_todos = [t for t in todos if t.get("priority") == "critical"][:5]
+            
+            notifications = []
+            for e in urgent_emails:
+                notifications.append({
+                    "type": "email",
+                    "item_id": str(e.get("id", "")),
+                    "priority": "high",
+                    "reason": "Urgent email requiring immediate attention",
+                    "action_required": True,
+                    "urgency_score": 0.8,
+                    "item": e
+                })
+            
+            for m in urgent_teams:
+                notifications.append({
+                    "type": "teams",
+                    "item_id": str(m.get("message_id", "") or m.get("id", "")),
+                    "priority": "high",
+                    "reason": "Urgent Teams message requiring immediate attention",
+                    "action_required": True,
+                    "urgency_score": 0.8,
+                    "item": m
+                })
+            
+            for t in critical_todos:
+                notifications.append({
+                    "type": "todo",
+                    "item_id": str(t.get("id", "")),
+                    "priority": "critical",
+                    "reason": "Critical todo item with high priority",
+                    "action_required": True,
+                    "urgency_score": 0.9,
+                    "item": t
+                })
+            
+            return {
+                "notifications": notifications,
+                "total": len(notifications),
+                "summary": f"{len(notifications)} urgent items requiring attention"
+            }
 
 

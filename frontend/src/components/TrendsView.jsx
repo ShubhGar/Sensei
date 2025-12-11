@@ -9,21 +9,52 @@ import {
   Grid,
   Paper,
   Chip,
-  Button
+  Button,
+  Divider
 } from '@mui/material'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import InsightsIcon from '@mui/icons-material/Insights'
-import { aiAPI } from '../services/api'
+import { aiAPI, emailAPI, teamsAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
+import SmartNotifications from './SmartNotifications'
+import DailyDigest from './DailyDigest'
+import DeadlineRisks from './DeadlineRisks'
+import CrossPlatformCorrelation from './CrossPlatformCorrelation'
 
 const TrendsView = () => {
   const { mode } = useTheme()
   const [trends, setTrends] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [emailSummary, setEmailSummary] = useState(null)
+  const [teamsSummary, setTeamsSummary] = useState(null)
+
+  const loadEmailSummary = async () => {
+    try {
+      const response = await emailAPI.getInbox(10, false)
+      if (response.data) {
+        setEmailSummary(response.data)
+      }
+    } catch (err) {
+      console.error('Error loading email summary:', err)
+    }
+  }
+
+  const loadTeamsSummary = async () => {
+    try {
+      const response = await teamsAPI.getMessages(10)
+      if (response.data) {
+        setTeamsSummary(response.data)
+      }
+    } catch (err) {
+      console.error('Error loading Teams summary:', err)
+    }
+  }
 
   useEffect(() => {
     loadTrends()
+    loadEmailSummary()
+    loadTeamsSummary()
   }, [])
 
   const loadTrends = async () => {
@@ -350,6 +381,46 @@ const TrendsView = () => {
           Refresh Analysis
         </Button>
       </Box>
+
+      {/* AI-Powered Insights Section */}
+      <Divider sx={{ my: 4, borderWidth: 2, borderColor: 'primary.light' }} />
+      
+      <Typography 
+        variant="h6" 
+        gutterBottom
+        sx={{ 
+          mb: 3,
+          fontWeight: 700,
+          color: 'text.primary',
+        }}
+      >
+        AI-Powered Insights
+      </Typography>
+
+      <Grid container spacing={{ xs: 2, sm: 2.5, md: 3 }}>
+        {/* Smart Notifications */}
+        <Grid item xs={12} md={6}>
+          <SmartNotifications />
+        </Grid>
+
+        {/* Daily Digest */}
+        <Grid item xs={12} md={6}>
+          <DailyDigest />
+        </Grid>
+
+        {/* Deadline Risks */}
+        <Grid item xs={12}>
+          <DeadlineRisks />
+        </Grid>
+
+        {/* Cross-Platform Correlation */}
+        <Grid item xs={12}>
+          <CrossPlatformCorrelation 
+            emails={emailSummary?.emails || null}
+            teamsMessages={teamsSummary?.messages || null}
+          />
+        </Grid>
+      </Grid>
     </Box>
   )
 }

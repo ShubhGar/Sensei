@@ -1,13 +1,67 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+// Use relative URL in development (to leverage Vite proxy) or explicit URL if provided
+// In production, VITE_API_URL should be set to the backend URL
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? '' : 'http://localhost:8000')
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json'
-  }
+  },
+  timeout: 30000 // Increased timeout for AI operations (30 seconds)
 })
+
+// Request deduplication: prevent multiple simultaneous calls to the same endpoint
+const pendingRequests = new Map()
+
+// Request interceptor for deduplication
+api.interceptors.request.use(
+  (config) => {
+    // Create a unique key for the request (method + url + params)
+    const requestKey = `${config.method}:${config.url}:${JSON.stringify(config.params || {})}`
+    
+    // If a request with the same key is already pending, return the existing promise
+    if (pendingRequests.has(requestKey)) {
+      console.log(`[API] Deduplicating request: ${requestKey}`)
+      return pendingRequests.get(requestKey)
+    }
+    
+    // Create a new promise for this request
+    const requestPromise = Promise.resolve(config)
+      .then((config) => {
+        // Remove from pending after request completes
+        pendingRequests.delete(requestKey)
+        return config
+      })
+      .catch((error) => {
+        // Remove from pending on error
+        pendingRequests.delete(requestKey)
+        throw error
+      })
+    
+    pendingRequests.set(requestKey, requestPromise)
+    return requestPromise
+  },
+  (error) => {
+    return Promise.reject(error)
+  }
+)
+
+// Response interceptor to clean up pending requests
+api.interceptors.response.use(
+  (response) => {
+    return response
+  },
+  (error) => {
+    // Clean up on error
+    if (error.config) {
+      const requestKey = `${error.config.method}:${error.config.url}:${JSON.stringify(error.config.params || {})}`
+      pendingRequests.delete(requestKey)
+    }
+    return Promise.reject(error)
+  }
+)
 
 // Transcription API
 export const transcriptionAPI = {
@@ -39,14 +93,60 @@ export const aiAPI = {
   analyzeTrends: (limit = 10) =>
     api.get('/api/ai/trends', { params: { limit } }),
   semanticSearch: (query, limit = 10) =>
-    api.post('/api/ai/semantic-search', { query, limit })
+    api.post('/api/ai/semantic-search', { query, limit }),
+  // New features
+  analyzeEmailSentiment: (emailContent, subject) =>
+    api.post('/api/ai/email/sentiment', null, {
+      params: { email_content: emailContent, subject }
+    }),
+  scoreEmailPriority: (emailContent, subject, sender, receivedAt = null) =>
+    api.post('/api/ai/email/priority-score', null, {
+      params: { email_content: emailContent, subject, sender, received_at: receivedAt }
+    }),
+  summarizeTeamsConversation: (messages, threadId = null) =>
+    api.post('/api/ai/teams/conversation-summary', { messages, thread_id: threadId }),
+  analyzeChannelActivity: (messages, channelName = null) =>
+    api.post('/api/ai/teams/channel-activity', { messages, channel_name: channelName }),
+  analyzeMentions: (messages, userEmail = null) =>
+    api.post('/api/ai/teams/mentions', { messages, user_email: userEmail }),
+  correlateCrossPlatform: (emails = [], teamsMessages = []) =>
+    api.post('/api/ai/correlate', { emails, teams_messages: teamsMessages }),
+  getDailyDigest: () =>
+    api.get('/api/ai/digest/daily'),
+  predictDeadlineRisks: () =>
+    api.get('/api/ai/risks/deadlines'),
+  suggestTeamsResponse: (messageContent, conversationContext = null, tone = null) =>
+    api.post('/api/ai/teams/suggest-response', {
+      message_content: messageContent,
+      conversation_context: conversationContext,
+      tone
+    }),
+  convertToJira: (text, issueType = 'Task') =>
+    api.post('/api/ai/convert/jira', null, {
+      params: { text, issue_type: issueType }
+    }),
+  convertToConfluence: (text, pageType = 'Documentation') =>
+    api.post('/api/ai/convert/confluence', null, {
+      params: { text, page_type: pageType }
+    }),
+  optimizeTone: (text, targetAudience, desiredTone, context = null) =>
+    api.post('/api/ai/optimize-tone', null, {
+      params: { text, target_audience: targetAudience, desired_tone: desiredTone, context }
+    }),
+  getSmartNotifications: () =>
+    api.get('/api/ai/notifications/smart')
 }
 
 // Email API
 export const emailAPI = {
-  getInbox: (maxResults = 50, unreadOnly = false) =>
+  getInbox: (maxResults = 50, unreadOnly = false, includeSentiment = false, includePriorityScore = false) =>
     api.get('/api/email/inbox', {
-      params: { max_results: maxResults, unread_only: unreadOnly }
+      params: { 
+        max_results: maxResults, 
+        unread_only: unreadOnly,
+        include_sentiment: includeSentiment,
+        include_priority_score: includePriorityScore
+      }
     }),
   suggestReply: (emailId) =>
     api.post(`/api/email/suggest-reply/${emailId}`),
@@ -62,9 +162,16 @@ export const emailAPI = {
 
 // Teams API
 export const teamsAPI = {
-  getMessages: (maxResults = 50, chatType = 'chats', teamId = null, channelId = null) =>
+  getMessages: (maxResults = 50, chatType = 'chats', teamId = null, channelId = null, analyzeMentions = false, analyzeActivity = false) =>
     api.get('/api/teams/messages', {
-      params: { max_results: maxResults, chat_type: chatType, team_id: teamId, channel_id: channelId }
+      params: { 
+        max_results: maxResults, 
+        chat_type: chatType, 
+        team_id: teamId, 
+        channel_id: channelId,
+        analyze_mentions: analyzeMentions,
+        analyze_activity: analyzeActivity
+      }
     }),
   getJoinedTeams: (maxResults = 100) =>
     api.get('/api/teams/joined', {

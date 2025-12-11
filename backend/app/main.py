@@ -100,7 +100,11 @@ app = FastAPI(
 app.add_middleware(RequestLoggingMiddleware)
 
 # CORS configuration
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+# Default to common frontend ports
+default_origins = "http://localhost:3000,http://localhost:5173,http://localhost:5174"
+allowed_origins = os.getenv("ALLOWED_ORIGINS", default_origins).split(",")
+# Clean up any whitespace
+allowed_origins = [origin.strip() for origin in allowed_origins if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,

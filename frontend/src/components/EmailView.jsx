@@ -23,7 +23,10 @@ import {
   IconButton,
   Collapse,
   Avatar,
-  Tooltip
+  Tooltip,
+  Switch,
+  FormControlLabel,
+  LinearProgress
 } from '@mui/material'
 import EmailIcon from '@mui/icons-material/Email'
 import InboxIcon from '@mui/icons-material/Inbox'
@@ -61,6 +64,8 @@ const EmailView = () => {
   const [summarizingEmails, setSummarizingEmails] = useState(new Set())
   const [generatingTodos, setGeneratingTodos] = useState(new Set())
   const [expandedEmails, setExpandedEmails] = useState(new Set())
+  const [includeSentiment, setIncludeSentiment] = useState(false)
+  const [includePriorityScore, setIncludePriorityScore] = useState(false)
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -97,7 +102,7 @@ const EmailView = () => {
     setLoading(true)
     setError(null)
     try {
-      const response = await emailAPI.getInbox(50, false)
+      const response = await emailAPI.getInbox(50, false, includeSentiment, includePriorityScore)
       setSummary(response.data)
       setEmails(response.data.emails || [])
     } catch (err) {
@@ -105,7 +110,7 @@ const EmailView = () => {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [includeSentiment, includePriorityScore])
 
   useEffect(() => {
     checkAuthStatus()
@@ -413,7 +418,33 @@ const EmailView = () => {
             >
               Inbox Summary
             </Typography>
-            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={includeSentiment}
+                    onChange={(e) => {
+                      setIncludeSentiment(e.target.checked)
+                      setTimeout(() => loadInbox(), 100)
+                    }}
+                    size="small"
+                  />
+                }
+                label="Sentiment Analysis"
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={includePriorityScore}
+                    onChange={(e) => {
+                      setIncludePriorityScore(e.target.checked)
+                      setTimeout(() => loadInbox(), 100)
+                    }}
+                    size="small"
+                  />
+                }
+                label="Priority Scoring"
+              />
               <Button 
                 variant="outlined" 
                 onClick={loadInbox} 
@@ -659,6 +690,42 @@ const EmailView = () => {
                                     />
                                   </Tooltip>
                                 )}
+                                {email.sentiment && (
+                                  <Tooltip title={`Sentiment: ${email.sentiment.sentiment || 'neutral'}`}>
+                                    <Chip 
+                                      label={`${email.sentiment.sentiment || 'neutral'}`}
+                                      size="small"
+                                      sx={{ 
+                                        bgcolor: email.sentiment.sentiment === 'positive' 
+                                          ? 'success.main' 
+                                          : email.sentiment.sentiment === 'negative' || email.sentiment.sentiment === 'frustrated'
+                                          ? 'error.main'
+                                          : 'info.main',
+                                        color: 'white',
+                                        fontWeight: 600,
+                                        height: 24,
+                                      }}
+                                    />
+                                  </Tooltip>
+                                )}
+                                {email.priority_score && (
+                                  <Tooltip title={`Priority Score: ${email.priority_score.priority_score}/100`}>
+                                    <Chip 
+                                      label={`Priority: ${email.priority_score.priority_level || 'medium'}`}
+                                      size="small"
+                                      sx={{ 
+                                        bgcolor: email.priority_score.priority_score >= 80
+                                          ? 'error.main'
+                                          : email.priority_score.priority_score >= 60
+                                          ? 'warning.main'
+                                          : 'info.main',
+                                        color: 'white',
+                                        fontWeight: 600,
+                                        height: 24,
+                                      }}
+                                    />
+                                  </Tooltip>
+                                )}
                               </Box>
                             </Box>
 
@@ -805,6 +872,89 @@ const EmailView = () => {
                                     <Typography variant="caption" color="text.secondary">
                                       <strong>Received:</strong> {new Date(email.received_at).toLocaleString()}
                                     </Typography>
+                                  )}
+                                  
+                                  {/* Sentiment Analysis */}
+                                  {email.sentiment && (
+                                    <Box sx={{ mt: 1, p: 1.5, bgcolor: 'background.paper', borderRadius: 1, borderLeft: '3px solid', borderLeftColor: 'primary.main' }}>
+                                      <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, mb: 1, display: 'block' }}>
+                                        Sentiment Analysis
+                                      </Typography>
+                                      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+                                        <Chip 
+                                          label={`Sentiment: ${email.sentiment.sentiment || 'neutral'}`}
+                                          size="small"
+                                          color={email.sentiment.sentiment === 'positive' ? 'success' : email.sentiment.sentiment === 'negative' || email.sentiment.sentiment === 'frustrated' ? 'error' : 'default'}
+                                        />
+                                        {email.sentiment.sentiment_score !== undefined && (
+                                          <Box sx={{ flex: 1, minWidth: 100 }}>
+                                            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>
+                                              Score: {(email.sentiment.sentiment_score * 100).toFixed(0)}%
+                                            </Typography>
+                                            <LinearProgress 
+                                              variant="determinate" 
+                                              value={email.sentiment.sentiment_score * 100}
+                                              sx={{ height: 6, borderRadius: 3 }}
+                                            />
+                                          </Box>
+                                        )}
+                                        {email.sentiment.urgency_detected && (
+                                          <Chip label="Urgent" size="small" color="error" />
+                                        )}
+                                        {email.sentiment.frustration_detected && (
+                                          <Chip label="Frustration Detected" size="small" color="warning" />
+                                        )}
+                                      </Box>
+                                      {email.sentiment.tone && (
+                                        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                                          Tone: {email.sentiment.tone}
+                                        </Typography>
+                                      )}
+                                    </Box>
+                                  )}
+
+                                  {/* Priority Score */}
+                                  {email.priority_score && (
+                                    <Box sx={{ mt: 1, p: 1.5, bgcolor: 'background.paper', borderRadius: 1, borderLeft: '3px solid', borderLeftColor: 'warning.main' }}>
+                                      <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, mb: 1, display: 'block' }}>
+                                        Priority Score
+                                      </Typography>
+                                      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+                                        <Box sx={{ flex: 1, minWidth: 150 }}>
+                                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                            <Typography variant="caption" color="text.secondary">
+                                              Score: {email.priority_score.priority_score}/100
+                                            </Typography>
+                                            <Typography variant="caption" color="text.secondary">
+                                              {email.priority_score.priority_level || 'medium'}
+                                            </Typography>
+                                          </Box>
+                                          <LinearProgress 
+                                            variant="determinate" 
+                                            value={email.priority_score.priority_score}
+                                            color={email.priority_score.priority_score >= 80 ? 'error' : email.priority_score.priority_score >= 60 ? 'warning' : 'info'}
+                                            sx={{ height: 8, borderRadius: 4 }}
+                                          />
+                                        </Box>
+                                      </Box>
+                                      {email.priority_score.factors && email.priority_score.factors.length > 0 && (
+                                        <Box sx={{ mt: 1 }}>
+                                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                                            Factors:
+                                          </Typography>
+                                          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                                            {email.priority_score.factors.map((factor, idx) => (
+                                              <Chip key={idx} label={factor} size="small" variant="outlined" />
+                                            ))}
+                                          </Box>
+                                        </Box>
+                                      )}
+                                      {email.priority_score.reasoning && (
+                                        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontStyle: 'italic' }}>
+                                          {email.priority_score.reasoning}
+                                        </Typography>
+                                      )}
+                                    </Box>
                                   )}
                                 </Box>
 
