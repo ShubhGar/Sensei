@@ -67,6 +67,7 @@ const TeamsView = () => {
   const [sendMessageError, setSendMessageError] = useState(null)
   const [jiraDialogOpen, setJiraDialogOpen] = useState(false)
   const [jiraDialogText, setJiraDialogText] = useState('')
+  const [generatingJiraContent, setGeneratingJiraContent] = useState(new Set())
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -255,28 +256,53 @@ const TeamsView = () => {
     })
   }
 
-  const handleConvertToJira = (message) => {
-    // Generate pre-populated text from message content
-    let textToConvert = ''
-    if (message.sender) {
-      textToConvert += `From: ${message.sender}\n`
-    }
-    if (message.sent_at) {
-      textToConvert += `Date: ${new Date(message.sent_at).toLocaleString()}\n`
-    }
-    if (message.channel_id) {
-      textToConvert += `Channel: ${message.channel_id}\n`
-    }
-    textToConvert += '\n'
-    if (message.content) {
-      textToConvert += message.content
-    }
-    if (message.summary) {
-      textToConvert += `\n\nSummary: ${message.summary}`
-    }
+  const handleConvertToJira = async (message) => {
+    const messageId = message.message_id || message.id || Math.random().toString()
+    setGeneratingJiraContent(prev => new Set(prev).add(messageId))
+    setError(null)
     
-    setJiraDialogText(textToConvert)
-    setJiraDialogOpen(true)
+    try {
+      // Generate AI-formatted content optimized for JIRA
+      const response = await aiAPI.generateJiraContent('teams', {
+        sender: message.sender || 'Unknown',
+        channel_id: message.channel_id || null,
+        sent_at: message.sent_at || null,
+        content: message.content || '',
+        summary: message.summary || '',
+        is_urgent: message.is_urgent || false
+      })
+      
+      setJiraDialogText(response.data.content)
+      setJiraDialogOpen(true)
+    } catch (err) {
+      setError('Failed to generate JIRA content: ' + (err.response?.data?.detail || err.message))
+      // Fallback to basic formatting if AI generation fails
+      let textToConvert = ''
+      if (message.sender) {
+        textToConvert += `From: ${message.sender}\n`
+      }
+      if (message.sent_at) {
+        textToConvert += `Date: ${new Date(message.sent_at).toLocaleString()}\n`
+      }
+      if (message.channel_id) {
+        textToConvert += `Channel: ${message.channel_id}\n`
+      }
+      textToConvert += '\n'
+      if (message.content) {
+        textToConvert += message.content
+      }
+      if (message.summary) {
+        textToConvert += `\n\nSummary: ${message.summary}`
+      }
+      setJiraDialogText(textToConvert)
+      setJiraDialogOpen(true)
+    } finally {
+      setGeneratingJiraContent(prev => {
+        const next = new Set(prev)
+        next.delete(messageId)
+        return next
+      })
+    }
   }
 
   return (
@@ -787,13 +813,14 @@ const TeamsView = () => {
                             size="small"
                             variant="outlined"
                             color="secondary"
-                            startIcon={<CodeIcon />}
+                            disabled={generatingJiraContent.has(message.message_id || message.id || '')}
+                            startIcon={generatingJiraContent.has(message.message_id || message.id || '') ? <CircularProgress size={16} /> : <CodeIcon />}
                             onClick={(e) => {
                               e.stopPropagation()
                               handleConvertToJira(message)
                             }}
                           >
-                            Convert to JIRA
+                            {generatingJiraContent.has(message.message_id || message.id || '') ? 'Generating...' : 'Convert to JIRA'}
                           </Button>
                         </Box>
                       </Box>

@@ -21,6 +21,7 @@ from app.database import get_db, MeetingSession, TodoItem
 from app.services.ai_service import AIService
 from app.integrations.email_integration import EmailIntegration
 from app.integrations.teams_integration import TeamsIntegration
+from app.integrations.jira_integration import JiraIntegration
 import json
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ router = APIRouter()
 ai_service = AIService()
 email_integration = EmailIntegration()
 teams_integration = TeamsIntegration()
+jira_integration = JiraIntegration()
 
 
 @router.post("/meeting-insights/{session_id}", response_model=MeetingInsights)
@@ -660,6 +662,52 @@ async def convert_to_jira(
     except Exception as e:
         logger.error(f"Error converting to Jira: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error converting to Jira: {str(e)}")
+
+
+@router.get("/jira-projects")
+async def get_jira_projects():
+    """Get list of accessible JIRA projects"""
+    try:
+        projects = await jira_integration.get_projects()
+        return {"projects": projects}
+    except ValueError as e:
+        logger.error(f"Error fetching JIRA projects: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error fetching JIRA projects: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error fetching JIRA projects: {str(e)}")
+
+
+@router.post("/create-jira-issue")
+async def create_jira_issue(
+    project_key: str = Query(..., description="JIRA project key"),
+    summary: str = Query(..., description="Issue summary"),
+    description: str = Query(..., description="Issue description"),
+    issue_type: str = Query("Task", description="Issue type"),
+    priority: Optional[str] = Query(None, description="Priority"),
+    labels: Optional[str] = Query(None, description="Comma-separated labels"),
+    assignee: Optional[str] = Query(None, description="Assignee username")
+):
+    """Create a JIRA issue"""
+    try:
+        labels_list = [l.strip() for l in labels.split(",")] if labels else None
+        
+        result = await jira_integration.create_issue(
+            project_key=project_key,
+            summary=summary,
+            description=description,
+            issue_type=issue_type,
+            priority=priority,
+            labels=labels_list,
+            assignee=assignee
+        )
+        return result
+    except ValueError as e:
+        logger.error(f"Validation error creating JIRA issue: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating JIRA issue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error creating JIRA issue: {str(e)}")
 
 
 @router.post("/convert/confluence", response_model=ConfluencePage)

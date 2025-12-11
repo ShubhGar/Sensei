@@ -129,6 +129,20 @@ export const aiAPI = {
     api.post('/api/ai/convert/jira', null, {
       params: { text, issue_type: issueType }
     }),
+  getJiraProjects: () =>
+    api.get('/api/ai/jira-projects'),
+  createJiraIssue: (projectKey, summary, description, issueType = 'Task', priority = null, labels = null, assignee = null) =>
+    api.post('/api/ai/create-jira-issue', null, {
+      params: { 
+        project_key: projectKey,
+        summary,
+        description,
+        issue_type: issueType,
+        priority,
+        labels,
+        assignee
+      }
+    }),
   convertToConfluence: (text, pageType = 'Documentation') =>
     api.post('/api/ai/convert/confluence', null, {
       params: { text, page_type: pageType }
