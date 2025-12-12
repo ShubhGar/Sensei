@@ -38,6 +38,7 @@ import { teamsAPI, authAPI, aiAPI } from '../services/api'
 import SendIcon from '@mui/icons-material/Send'
 import CodeIcon from '@mui/icons-material/Code'
 import { useTheme } from '../ThemeContext'
+import { getCardBackground, DESIGN_TOKENS } from '../designSystem'
 import ContextMenu from './ContextMenu'
 import JiraConversionDialog from './JiraConversionDialog'
 
@@ -84,9 +85,7 @@ const TeamsView = () => {
   })
   
   // Theme-aware card background
-  const cardBackground = mode === 'dark' 
-    ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-    : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)'
+  const cardBackground = getCardBackground(mode)
 
   const checkAuthStatus = useCallback(async () => {
     try {
@@ -104,7 +103,8 @@ const TeamsView = () => {
     setLoading(true)
     setError(null)
     try {
-      const response = await teamsAPI.getMessages(50, chatType, null, null, analyzeMentions, analyzeActivity, forceRefresh)
+      // Reduced to 20 items for faster loading
+      const response = await teamsAPI.getMessages(20, chatType, null, null, analyzeMentions, analyzeActivity, forceRefresh)
       console.log('[TeamsView] API Response:', response.data)
       setSummary(response.data)
       const messagesList = response.data.messages || []
@@ -728,7 +728,7 @@ const TeamsView = () => {
                   sx={{
                     border: '1px solid',
                     borderColor: 'secondary.light',
-                    borderRadius: 2,
+                    borderRadius: 2, // Very subtle rounded corners
                     mb: 1.5,
                     bgcolor: (message.priority_score?.blocked_on_us 
                       ? (mode === 'dark' ? '#4A1A1A' : '#FFEBEE')

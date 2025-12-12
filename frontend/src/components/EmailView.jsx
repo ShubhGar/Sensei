@@ -45,6 +45,7 @@ import { emailAPI, authAPI, aiAPI } from '../services/api'
 import SendIcon from '@mui/icons-material/Send'
 import CodeIcon from '@mui/icons-material/Code'
 import { useTheme } from '../ThemeContext'
+import { getCardBackground, DESIGN_TOKENS } from '../designSystem'
 import ContextMenu from './ContextMenu'
 import JiraConversionDialog from './JiraConversionDialog'
 
@@ -91,9 +92,7 @@ const EmailView = () => {
   })
   
   // Theme-aware card background
-  const cardBackground = mode === 'dark' 
-    ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-    : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)'
+  const cardBackground = getCardBackground(mode)
 
   const checkAuthStatus = useCallback(async () => {
     try {
@@ -111,8 +110,8 @@ const EmailView = () => {
     setLoading(true)
     setError(null)
     try {
-      // Always request priority scoring for sorting (even if UI toggle is off)
-      const response = await emailAPI.getInbox(50, false, includeSentiment, true)
+      // Request priority scoring for sorting (reduced to 20 items for faster loading)
+      const response = await emailAPI.getInbox(20, false, includeSentiment, true)
       const emailsList = response.data.emails || []
       
       // Sort emails by criticality and urgency (highest first)
@@ -682,7 +681,7 @@ const EmailView = () => {
                           : email.importance === 'high'
                           ? 'warning.main'
                           : 'divider',
-                        borderRadius: 2,
+                        borderRadius: 2, // Very subtle rounded corners
                         bgcolor: email.is_urgent 
                           ? (mode === 'dark' ? 'rgba(211, 47, 47, 0.1)' : 'rgba(211, 47, 47, 0.05)')
                           : email.importance === 'high'
@@ -999,7 +998,7 @@ const EmailView = () => {
                                   gap: 1,
                                   p: 1.5,
                                   bgcolor: 'background.default',
-                                  borderRadius: 2,
+                                  borderRadius: 2, // Very subtle rounded corners
                                 }}>
                                   <Box sx={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
                                     <Typography variant="caption" color="text.secondary">

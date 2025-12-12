@@ -20,6 +20,7 @@ import GroupsIcon from '@mui/icons-material/Groups'
 import LoginIcon from '@mui/icons-material/Login'
 import { emailAPI, teamsAPI, authAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
+import { getCardBackground, DESIGN_TOKENS } from '../designSystem'
 import ContextMenu from './ContextMenu'
 
 const CommunicationsView = () => {
@@ -50,9 +51,7 @@ const CommunicationsView = () => {
   })
   
   // Theme-aware card background
-  const cardBackground = mode === 'dark' 
-    ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-    : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)'
+  const cardBackground = getCardBackground(mode)
 
   const checkAuthStatus = useCallback(async () => {
     try {
@@ -79,10 +78,10 @@ const CommunicationsView = () => {
     setLoading(true)
     setError(null)
     try {
-      // Load emails and teams messages in parallel
+      // Load emails and teams messages in parallel (reduced to 20 for faster loading)
       const [emailResponse, teamsResponse] = await Promise.allSettled([
-        emailAPI.getInbox(50, false),
-        teamsAPI.getMessages(50, 'chats')
+        emailAPI.getInbox(20, false),
+        teamsAPI.getMessages(20, 'chats')
       ])
 
       const emails = []
@@ -244,7 +243,7 @@ const CommunicationsView = () => {
           severity="error" 
           sx={{ 
             mb: 3,
-            borderRadius: 2,
+            borderRadius: 2, // Very subtle rounded corners
           }} 
           onClose={() => setError(null)}
         >
@@ -257,7 +256,7 @@ const CommunicationsView = () => {
           severity="info" 
           sx={{ 
             mb: 3,
-            borderRadius: 2,
+            borderRadius: 2, // Very subtle rounded corners
           }}
           action={
             <Button
@@ -417,7 +416,7 @@ const CommunicationsView = () => {
                     sx={{
                       border: '1px solid',
                       borderColor: 'secondary.light',
-                      borderRadius: 2,
+                      borderRadius: 2, // Very subtle rounded corners
                       mb: 1.5,
                       bgcolor: message.is_urgent 
                         ? (mode === 'dark' ? '#3A2A1E' : '#FFF8E1')

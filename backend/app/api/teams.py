@@ -16,9 +16,9 @@ router = APIRouter()
 teams_integration = TeamsIntegration()
 ai_service = AIService()
 
-# Simple in-memory cache for Teams requests (TTL: 30 seconds)
+# Simple in-memory cache for Teams requests (TTL: 60 seconds - increased for better performance)
 _teams_cache = {}
-_cache_ttl = 30  # seconds
+_cache_ttl = 60  # seconds
 
 
 @router.get("/messages", response_model=TeamsSummary)
@@ -42,9 +42,9 @@ async def get_messages(
             if cache_key in _teams_cache:
                 del _teams_cache[cache_key]
         
-        # Check cache first (only for basic requests without analysis and not force_refresh)
+        # Check cache first (cache works for all requests except when force_refresh is True)
         cache_key = f"teams_{chat_type}_{max_results}_{team_id}_{channel_id}_{analyze_mentions}_{analyze_activity}"
-        if not force_refresh and not analyze_mentions and not analyze_activity:
+        if not force_refresh:
             cached = _teams_cache.get(cache_key)
             if cached and (time.time() - cached["timestamp"]) < _cache_ttl:
                 logger.info(f"[Teams] Returning cached messages data (age: {time.time() - cached['timestamp']:.1f}s)")
@@ -89,7 +89,7 @@ async def get_messages(
         # Always enhance messages with priority scoring for sorting
         # Process in parallel with timeout to avoid blocking
         
-        async def score_message_priority_with_timeout(message, timeout=3.0):
+        async def score_message_priority_with_timeout(message, timeout=2.0):
             """Score Teams message priority with timeout"""
             content = message.get("content", "")
             sender = message.get("sender", "")
@@ -129,10 +129,24 @@ async def get_messages(
                     "factors": []
                 }
         
-        # Process messages in parallel batches (limit to 20 for performance)
-        messages_to_score = messages[:20]
+        # Process messages in parallel batches (limit to 5 for performance - reduced from 10)
+        # Only score top 5 most recent messages to avoid timeout
+        messages_to_score = messages[:5]
         if messages_to_score:
-            await asyncio.gather(*[score_message_priority_with_timeout(message) for message in messages_to_score], return_exceptions=True)
+            await asyncio.gather(*[score_message_priority_with_timeout(message, timeout=1.5) for message in messages_to_score], return_exceptions=True)
+        
+        # For remaining messages, set default priority scores
+        for message in messages[5:]:
+            if "priority_score" not in message:
+                message["priority_score"] = {
+                    "priority_score": 50,
+                    "priority_level": "medium",
+                    "urgency_score": 50,
+                    "criticality_score": 50,
+                    "waiting_for_us": False,
+                    "blocked_on_us": False,
+                    "factors": []
+                }
         
         # If dummy data is being used, log it
         if is_dummy_data:
@@ -205,8 +219,8 @@ async def get_messages(
             except Exception as e:
                 logger.warning(f"[Teams] Error analyzing channel activity: {e}")
         
-        # Cache the result if it's a basic request
-        if not analyze_mentions and not analyze_activity:
+        # Cache the result (including priority scores for faster subsequent loads)
+        if not force_refresh:
             _teams_cache[cache_key] = {
                 "data": summary,
                 "timestamp": time.time()

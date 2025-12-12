@@ -31,6 +31,7 @@ import QuestionAnswerIcon from '@mui/icons-material/QuestionAnswer'
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday'
 import { transcriptionAPI, aiAPI, emailAPI, teamsAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
+import { getCardBackground, getHighlightCardBackground } from '../designSystem'
 import ContextMenu from './ContextMenu'
 
 const Home = () => {
@@ -50,13 +51,8 @@ const Home = () => {
   const [contextMenu, setContextMenu] = useState({ open: false, anchorEl: null, data: null })
   
   // Theme-aware card background values
-  const cardBackground = mode === 'dark' 
-    ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-    : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)'
-  
-  const highlightCardBackground = mode === 'dark'
-    ? 'linear-gradient(135deg, #1E1E1E 0%, #1E3A3A 100%)'
-    : 'linear-gradient(135deg, #FFFFFF 0%, #E8F5E9 100%)'
+  const cardBackground = getCardBackground(mode)
+  const highlightCardBackground = getHighlightCardBackground(mode)
 
   const loadEmailSummary = useCallback(async () => {
     try {
@@ -109,9 +105,14 @@ const Home = () => {
   }, [])
 
   useEffect(() => {
-    loadEmailSummary()
-    loadTeamsSummary()
-    loadLatestMeetings()
+    // Load all data in parallel for faster page load
+    Promise.all([
+      loadEmailSummary(),
+      loadTeamsSummary(),
+      loadLatestMeetings()
+    ]).catch(err => {
+      console.error('Error loading home page data:', err)
+    })
   }, [loadEmailSummary, loadTeamsSummary, loadLatestMeetings])
 
   const handleMeetingClick = async (meeting) => {

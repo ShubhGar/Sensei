@@ -36,6 +36,7 @@ import EmailIcon from '@mui/icons-material/Email'
 import BugReportIcon from '@mui/icons-material/BugReport'
 import AssignmentIcon from '@mui/icons-material/Assignment'
 import { useTheme } from '../ThemeContext'
+import { getCardBackground, getHighlightCardBackground, getRiskCardBackground } from '../designSystem'
 
 const TranscriptionView = () => {
   const navigate = useNavigate()
@@ -92,24 +93,10 @@ const TranscriptionView = () => {
     return 'transcription'
   })
   
-  // Theme-aware card background
-  const getCardBackground = () => {
-    return mode === 'dark' 
-      ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-      : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)'
-  }
-  
-  const getHighlightCardBackground = () => {
-    return mode === 'dark'
-      ? 'linear-gradient(135deg, #1E1E1E 0%, #1E3A3A 100%)'
-      : 'linear-gradient(135deg, #FFFFFF 0%, #E8F5E9 100%)'
-  }
-  
-  const getRiskCardBackground = () => {
-    return mode === 'dark'
-      ? 'linear-gradient(135deg, #1E1E1E 0%, #3A2A1E 100%)'
-      : 'linear-gradient(135deg, #FFFFFF 0%, #FFF3E0 100%)'
-  }
+  // Use design system functions for card backgrounds
+  const cardBackground = getCardBackground(mode)
+  const highlightCardBackground = getHighlightCardBackground(mode)
+  const riskCardBackground = getRiskCardBackground(mode)
 
   useEffect(() => {
     return () => {
@@ -997,9 +984,7 @@ const TranscriptionView = () => {
               <Card
                 sx={{
                   height: '100%',
-                  background: mode === 'dark' 
-                    ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                    : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                  background: cardBackground,
                   borderLeft: '4px solid',
                   borderLeftColor: 'primary.main',
                   transition: 'all 0.3s ease',
@@ -1055,9 +1040,7 @@ const TranscriptionView = () => {
               <Card
                 sx={{
                   height: '100%',
-                  background: mode === 'dark' 
-                    ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                    : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                  background: cardBackground,
                   borderLeft: '4px solid',
                   borderLeftColor: 'secondary.main',
                   transition: 'all 0.3s ease',
@@ -1120,7 +1103,7 @@ const TranscriptionView = () => {
       <Card 
         sx={{ 
           mb: 3,
-          background: getCardBackground(),
+          background: cardBackground,
           borderLeft: '4px solid',
           borderLeftColor: 'primary.main',
           transition: 'all 0.3s ease',
@@ -1468,7 +1451,7 @@ const TranscriptionView = () => {
         <Card 
           sx={{ 
             mb: 3,
-            background: getCardBackground(),
+            background: cardBackground,
             borderLeft: '4px solid',
             borderLeftColor: 'primary.main',
             transition: 'all 0.3s ease',
@@ -1534,7 +1517,7 @@ const TranscriptionView = () => {
         <Card 
           sx={{ 
             mb: 3,
-            background: getHighlightCardBackground(),
+            background: highlightCardBackground,
             border: '2px solid',
             borderColor: 'primary.main',
             boxShadow: '0 2px 8px rgba(0, 150, 136, 0.1)',
@@ -1667,7 +1650,7 @@ const TranscriptionView = () => {
         <Card 
           sx={{ 
             mb: 3,
-            background: getCardBackground(),
+            background: cardBackground,
             borderLeft: '4px solid',
             borderLeftColor: 'primary.main',
             transition: 'all 0.3s ease',
@@ -1727,7 +1710,7 @@ const TranscriptionView = () => {
         <Card 
           sx={{ 
             mb: 3,
-            background: getCardBackground(),
+            background: cardBackground,
             borderLeft: '4px solid',
             borderLeftColor: 'primary.main',
             transition: 'all 0.3s ease',
@@ -1832,7 +1815,7 @@ const TranscriptionView = () => {
         PaperProps={{
           sx: {
             borderRadius: 3,
-            background: getCardBackground(),
+            background: cardBackground,
           }
         }}
       >
@@ -1942,7 +1925,7 @@ const TranscriptionView = () => {
         PaperProps={{
           sx: {
             borderRadius: 3,
-            background: getCardBackground(),
+            background: cardBackground,
           }
         }}
       >
@@ -2073,7 +2056,7 @@ const TranscriptionView = () => {
           sx={{
             border: '2px solid',
             borderColor: 'error.main',
-            background: getRiskCardBackground(),
+            background: riskCardBackground,
             transition: 'all 0.3s ease',
           }}
         >

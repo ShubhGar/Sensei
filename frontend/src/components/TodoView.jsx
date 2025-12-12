@@ -51,19 +51,24 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { todoAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
+import { getCardBackground } from '../designSystem'
 
-const PRIORITY_COLORS = {
-  low: { bg: '#E8F5E9', color: '#2E7D32', border: '#4CAF50' },
-  medium: { bg: '#FFF9C4', color: '#F57F17', border: '#FBC02D' },
-  high: { bg: '#FFE0B2', color: '#E65100', border: '#FF9800' },
-  critical: { bg: '#FFCDD2', color: '#C62828', border: '#F44336' }
-}
-
-const PRIORITY_DARK_COLORS = {
-  low: { bg: 'rgba(76, 175, 80, 0.15)', color: '#81C784', border: '#4CAF50' },
-  medium: { bg: 'rgba(251, 192, 45, 0.15)', color: '#FFD54F', border: '#FBC02D' },
-  high: { bg: 'rgba(255, 152, 0, 0.15)', color: '#FFB74D', border: '#FF9800' },
-  critical: { bg: 'rgba(244, 67, 54, 0.15)', color: '#E57373', border: '#F44336' }
+// Priority colors using theme-aware approach
+const getPriorityColors = (mode) => {
+  if (mode === 'dark') {
+    return {
+      low: { bg: 'rgba(76, 175, 80, 0.15)', color: '#81C784', border: '#4CAF50' },
+      medium: { bg: 'rgba(251, 192, 45, 0.15)', color: '#FFD54F', border: '#FBC02D' },
+      high: { bg: 'rgba(255, 152, 0, 0.15)', color: '#FFB74D', border: '#FF9800' },
+      critical: { bg: 'rgba(244, 67, 54, 0.15)', color: '#E57373', border: '#F44336' }
+    }
+  }
+  return {
+    low: { bg: '#E8F5E9', color: '#2E7D32', border: '#4CAF50' },
+    medium: { bg: '#FFF9C4', color: '#F57F17', border: '#FBC02D' },
+    high: { bg: '#FFE0B2', color: '#E65100', border: '#FF9800' },
+    critical: { bg: '#FFCDD2', color: '#C62828', border: '#F44336' }
+  }
 }
 
 const PRIORITY_ORDER = ['critical', 'high', 'medium', 'low']
@@ -92,7 +97,7 @@ const SortableTodoItem = ({ todo, priorityColor, onToggleComplete, onEdit, onDel
       sx={{
         border: '1px solid',
         borderColor: priorityColor.border,
-        borderRadius: 2,
+        borderRadius: 2, // Very subtle rounded corners
         mb: 1.5,
         bgcolor: priorityColor.bg,
         transition: 'all 0.2s ease',
@@ -214,11 +219,8 @@ const TodoView = () => {
   const [activeId, setActiveId] = useState(null)
   const [groupedTodos, setGroupedTodos] = useState({})
 
-  const cardBackground = mode === 'dark' 
-    ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-    : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)'
-
-  const priorityColors = mode === 'dark' ? PRIORITY_DARK_COLORS : PRIORITY_COLORS
+  const cardBackground = getCardBackground(mode)
+  const priorityColors = getPriorityColors(mode)
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -499,7 +501,7 @@ const TodoView = () => {
                     sx={{
                       border: '2px dashed',
                       borderColor: 'primary.main',
-                      borderRadius: 2,
+                      borderRadius: 2, // Very subtle rounded corners
                       p: 2,
                       bgcolor: 'background.paper',
                       opacity: 0.8

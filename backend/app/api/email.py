@@ -19,9 +19,9 @@ router = APIRouter()
 email_integration = EmailIntegration()
 ai_service = AIService()
 
-# Simple in-memory cache for inbox requests (TTL: 30 seconds)
+# Simple in-memory cache for inbox requests (TTL: 60 seconds - increased for better performance)
 _inbox_cache = {}
-_cache_ttl = 30  # seconds
+_cache_ttl = 60  # seconds
 
 
 @router.get("/inbox", response_model=EmailSummary)
@@ -33,22 +33,22 @@ async def get_inbox(
 ):
     """Get inbox summary with AI analysis"""
     try:
-        # Check cache first (only for basic requests without sentiment/priority)
+        # Check cache first (cache works for all requests including priority scores)
         cache_key = f"inbox_{max_results}_{unread_only}_{include_sentiment}_{include_priority_score}"
-        if not include_sentiment and not include_priority_score:
-            cached = _inbox_cache.get(cache_key)
-            if cached and (time.time() - cached["timestamp"]) < _cache_ttl:
-                logger.info(f"[Email] Returning cached inbox data (age: {time.time() - cached['timestamp']:.1f}s)")
-                return EmailSummary(**cached["data"])
+        cached = _inbox_cache.get(cache_key)
+        if cached and (time.time() - cached["timestamp"]) < _cache_ttl:
+            logger.info(f"[Email] Returning cached inbox data (age: {time.time() - cached['timestamp']:.1f}s)")
+            return EmailSummary(**cached["data"])
         
         logger.info(f"[Email] Getting inbox - max_results: {max_results}, unread_only: {unread_only}")
         
         emails = await email_integration.get_outlook_inbox(max_results, unread_only)
         
-        # Always enhance emails with priority scoring and sentiment for criticality/urgency sorting
+        # Enhance emails with priority scoring and sentiment for criticality/urgency sorting
+        # Only if not cached (cached results already have priority scores)
         # Process in parallel with timeout to avoid blocking
         
-        async def score_email_priority_with_timeout(email, timeout=3.0):
+        async def score_email_priority_with_timeout(email, timeout=2.0):
             """Score email priority with timeout"""
             subject = email.get("subject", "")
             body = email.get("body", "") or email.get("body_preview", "")
@@ -104,25 +104,38 @@ async def get_inbox(
             except (asyncio.TimeoutError, Exception) as e:
                 logger.warning(f"[Email] Error analyzing sentiment for email {email.get('id')}: {e}")
         
-        # Process emails in parallel batches (limit to 20 for performance)
-        emails_to_score = emails[:20]
+        # Process emails in parallel batches (limit to 5 for performance - reduced from 10)
+        # Only score top 5 most recent emails to avoid timeout
+        emails_to_score = emails[:5]
         if emails_to_score:
-            # Score priority in parallel
-            await asyncio.gather(*[score_email_priority_with_timeout(email) for email in emails_to_score], return_exceptions=True)
+            # Score priority in parallel with shorter timeout
+            await asyncio.gather(*[score_email_priority_with_timeout(email, timeout=1.5) for email in emails_to_score], return_exceptions=True)
             # Analyze sentiment in parallel if requested
             if include_sentiment:
-                await asyncio.gather(*[analyze_sentiment_with_timeout(email) for email in emails_to_score], return_exceptions=True)
+                await asyncio.gather(*[analyze_sentiment_with_timeout(email, timeout=1.5) for email in emails_to_score], return_exceptions=True)
+        
+        # For remaining emails, set default priority scores
+        for email in emails[5:]:
+            if "priority_score" not in email:
+                email["priority_score"] = {
+                    "priority_score": 50,
+                    "priority_level": "medium",
+                    "urgency_score": 50,
+                    "criticality_score": 50,
+                    "waiting_for_us": False,
+                    "blocked_on_us": False,
+                    "factors": []
+                }
         
         summary = await email_integration.analyze_inbox(emails, ai_service)
         
-        # Cache the result if it's a basic request
-        if not include_sentiment and not include_priority_score:
-            _inbox_cache[cache_key] = {
-                "data": summary,
-                "timestamp": time.time()
-            }
-            # Clean old cache entries (keep only last 10)
-            if len(_inbox_cache) > 10:
+        # Cache the result (including priority scores for faster subsequent loads)
+        _inbox_cache[cache_key] = {
+            "data": summary,
+            "timestamp": time.time()
+        }
+        # Clean old cache entries (keep only last 10)
+        if len(_inbox_cache) > 10:
                 oldest_key = min(_inbox_cache.keys(), key=lambda k: _inbox_cache[k]["timestamp"])
                 del _inbox_cache[oldest_key]
         

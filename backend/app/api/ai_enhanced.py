@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import logging
 import os
+import time
 
 from app.models.schemas import (
     MeetingInsights, EmailCategorization, ChatMessage, ChatResponse,
@@ -30,6 +31,10 @@ ai_service = AIService()
 email_integration = EmailIntegration()
 teams_integration = TeamsIntegration()
 jira_integration = JiraIntegration()
+
+# Cache for trends analysis (TTL: 5 minutes - trends don't change frequently)
+_trends_cache = {}
+_trends_cache_ttl = 300  # 5 minutes
 
 
 @router.post("/meeting-insights/{session_id}", response_model=MeetingInsights)
@@ -260,12 +265,20 @@ async def analyze_trends(
 ):
     """Analyze trends across multiple meetings"""
     try:
-        # Get recent meetings with MOM data
+        # Check cache first
+        cache_key = f"trends_{limit}"
+        cached = _trends_cache.get(cache_key)
+        if cached and (time.time() - cached["timestamp"]) < _trends_cache_ttl:
+            logger.info(f"[Trends] Returning cached trends data (age: {time.time() - cached['timestamp']:.1f}s)")
+            return TrendAnalysis(**cached["data"])
+        
+        # Get recent meetings with MOM data (reduced limit for faster processing)
+        analysis_limit = min(limit, 5)  # Analyze max 5 meetings for faster response
         result = await db.execute(
             select(MeetingSession)
             .where(MeetingSession.mom.isnot(None))
             .order_by(MeetingSession.started_at.desc())
-            .limit(limit)
+            .limit(analysis_limit)
         )
         meetings = result.scalars().all()
         
@@ -303,8 +316,19 @@ async def analyze_trends(
         
         # Analyze trends
         trends = await ai_service.analyze_trends(meetings_data)
+        trends_data = trends if isinstance(trends, dict) else trends.dict() if hasattr(trends, 'dict') else {}
         
-        return TrendAnalysis(**trends)
+        # Cache the result
+        _trends_cache[cache_key] = {
+            "data": trends_data,
+            "timestamp": time.time()
+        }
+        # Clean old cache entries (keep only last 5)
+        if len(_trends_cache) > 5:
+            oldest_key = min(_trends_cache.keys(), key=lambda k: _trends_cache[k]["timestamp"])
+            del _trends_cache[oldest_key]
+        
+        return TrendAnalysis(**trends_data)
     except Exception as e:
         logger.error(f"Error analyzing trends: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error analyzing trends: {str(e)}")

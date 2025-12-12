@@ -16,6 +16,7 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import InsightsIcon from '@mui/icons-material/Insights'
 import { aiAPI, emailAPI, teamsAPI } from '../services/api'
 import { useTheme } from '../ThemeContext'
+import { getCardBackground } from '../designSystem'
 import SmartNotifications from './SmartNotifications'
 import DailyDigest from './DailyDigest'
 import DeadlineRisks from './DeadlineRisks'
@@ -52,9 +53,14 @@ const TrendsView = () => {
   }
 
   useEffect(() => {
-    loadTrends()
-    loadEmailSummary()
-    loadTeamsSummary()
+    // Load all data in parallel for faster page load
+    Promise.all([
+      loadTrends(),
+      loadEmailSummary(),
+      loadTeamsSummary()
+    ]).catch(err => {
+      console.error('Error loading trends page data:', err)
+    })
   }, [])
 
   const loadTrends = async () => {
@@ -162,9 +168,7 @@ const TrendsView = () => {
           <Grid item xs={12}>
             <Card
               sx={{
-                background: mode === 'dark'
-                  ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                  : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                background: getCardBackground(mode),
                 borderLeft: '4px solid',
                 borderLeftColor: 'primary.main',
               }}
@@ -201,9 +205,7 @@ const TrendsView = () => {
           <Grid item xs={12} md={6}>
             <Card
               sx={{
-                background: mode === 'dark'
-                  ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                  : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                background: getCardBackground(mode),
                 borderLeft: '4px solid',
                 borderLeftColor: 'secondary.main',
                 height: '100%',
@@ -246,9 +248,7 @@ const TrendsView = () => {
           <Grid item xs={12} md={6}>
             <Card
               sx={{
-                background: mode === 'dark'
-                  ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                  : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                background: getCardBackground(mode),
                 borderLeft: '4px solid',
                 borderLeftColor: 'success.main',
                 height: '100%',
@@ -277,9 +277,7 @@ const TrendsView = () => {
           <Grid item xs={12}>
             <Card
               sx={{
-                background: mode === 'dark'
-                  ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                  : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                background: getCardBackground(mode),
                 borderLeft: '4px solid',
                 borderLeftColor: 'warning.main',
               }}
@@ -307,9 +305,7 @@ const TrendsView = () => {
           <Grid item xs={12} md={6}>
             <Card
               sx={{
-                background: mode === 'dark'
-                  ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                  : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                background: getCardBackground(mode),
                 borderLeft: '4px solid',
                 borderLeftColor: 'info.main',
               }}
@@ -339,9 +335,7 @@ const TrendsView = () => {
           <Grid item xs={12} md={6}>
             <Card
               sx={{
-                background: mode === 'dark'
-                  ? 'linear-gradient(135deg, #1E1E1E 0%, #2A2A2A 100%)'
-                  : 'linear-gradient(135deg, #FFFFFF 0%, #F5F7F8 100%)',
+                background: getCardBackground(mode),
                 borderLeft: '4px solid',
                 borderLeftColor: 'info.main',
               }}
