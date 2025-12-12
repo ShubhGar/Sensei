@@ -109,11 +109,70 @@ const CommunicationsView = () => {
         })))
       }
 
-      // Combine and sort by timestamp (newest first)
+      // Helper function to check if item mentions user
+      const isMentioned = (item) => {
+        if (item.type === 'teams') {
+          const content = ((item.content || '') + '').toLowerCase()
+          return content.includes('@shubham') || 
+                 content.includes('shubham garg') || 
+                 content.includes('shubham.garg')
+        } else {
+          const body = ((item.body || item.body_preview || '') + '').toLowerCase()
+          const subject = ((item.subject || '') + '').toLowerCase()
+          const to = ((item.to || '') + '').toLowerCase()
+          const cc = ((item.cc || '') + '').toLowerCase()
+          return body.includes('@shubham') || 
+                 body.includes('shubham garg') || 
+                 body.includes('shubham.garg') ||
+                 subject.includes('shubham') ||
+                 to.includes('shubham.garg') ||
+                 cc.includes('shubham.garg')
+        }
+      }
+      
+      // Combine and sort by priority (mentions first, then by priority scores, then by timestamp)
       const combined = [...emails, ...teamsMessages].sort((a, b) => {
-        const dateA = new Date(a.timestamp || 0)
-        const dateB = new Date(b.timestamp || 0)
-        return dateB - dateA
+        // Highest priority: Mentions of user
+        const aMentioned = isMentioned(a) ? 2000 : 0
+        const bMentioned = isMentioned(b) ? 2000 : 0
+        
+        // Second: "blocked on us" and "waiting for us"
+        const aBlocked = a.priority_score?.blocked_on_us ? 1000 : 0
+        const bBlocked = b.priority_score?.blocked_on_us ? 1000 : 0
+        const aWaiting = a.priority_score?.waiting_for_us ? 500 : 0
+        const bWaiting = b.priority_score?.waiting_for_us ? 500 : 0
+        
+        // Then by criticality score
+        const aCriticality = a.priority_score?.criticality_score || a.priority_score?.priority_score || 0
+        const bCriticality = b.priority_score?.criticality_score || b.priority_score?.priority_score || 0
+        
+        // Then by urgency score
+        const aUrgency = a.priority_score?.urgency_score || a.priority_score?.priority_score || 0
+        const bUrgency = b.priority_score?.urgency_score || b.priority_score?.priority_score || 0
+        
+        // Then by priority score
+        const aPriority = a.priority_score?.priority_score || 0
+        const bPriority = b.priority_score?.priority_score || 0
+        
+        // Then by unread status (unread first)
+        const aUnread = !a.is_read ? 50 : 0
+        const bUnread = !b.is_read ? 50 : 0
+        
+        // Then by timestamp (newest first)
+        const dateA = new Date(a.timestamp || 0).getTime()
+        const dateB = new Date(b.timestamp || 0).getTime()
+        const dateDiff = dateB - dateA
+        
+        // Calculate total score
+        const aTotal = aMentioned + aBlocked + aWaiting + aCriticality + aUrgency + aPriority + aUnread
+        const bTotal = bMentioned + bBlocked + bWaiting + bCriticality + bUrgency + bPriority + bUnread
+        
+        // If scores are equal, sort by date
+        if (aTotal === bTotal) {
+          return dateDiff
+        }
+        
+        return bTotal - aTotal // Descending order (highest first)
       })
 
       setAllMessages(combined)

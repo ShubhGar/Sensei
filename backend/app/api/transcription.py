@@ -1,7 +1,7 @@
 """
 Transcription API endpoints
 """
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
@@ -480,6 +480,59 @@ async def cleanup_meetings_without_insights(
     except Exception as e:
         logger.error(f"[Transcription] Error cleaning up meetings: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error cleaning up meetings: {str(e)}")
+
+
+@router.post("/upload-transcript", response_model=MeetingSessionResponse)
+async def upload_transcript(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload a transcript file and create a session for analysis"""
+    try:
+        # Read file content
+        content = await file.read()
+        transcript_text = content.decode('utf-8')
+        
+        if not transcript_text or not transcript_text.strip():
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        
+        # Create a new session
+        session_id = str(uuid.uuid4())
+        session_title = title or file.filename or "Uploaded Transcript"
+        started_at = datetime.now(timezone.utc)
+        
+        logger.info(f"[Transcription] Creating session {session_id} from uploaded transcript file: {file.filename}")
+        
+        # Create session in database immediately (since we have the transcript)
+        session = MeetingSession(
+            id=session_id,
+            title=session_title,
+            started_at=started_at,
+            ended_at=started_at,  # Mark as ended since it's a file upload
+            is_active=False,
+            transcript=transcript_text,
+            full_transcript=transcript_text
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        
+        logger.info(f"[Transcription] Created session {session_id} from uploaded transcript, length: {len(transcript_text)}")
+        
+        return MeetingSessionResponse(
+            id=session_id,
+            title=session_title,
+            started_at=started_at,
+            ended_at=started_at,
+            is_active=False,
+            transcript=transcript_text
+        )
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be a valid UTF-8 text file")
+    except Exception as e:
+        logger.error(f"[Transcription] Error uploading transcript: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error uploading transcript: {str(e)}")
 
 
 @router.websocket("/ws/{session_id}")

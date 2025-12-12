@@ -108,11 +108,30 @@ const TeamsView = () => {
       console.log('[TeamsView] API Response:', response.data)
       setSummary(response.data)
       const messagesList = response.data.messages || []
+      const mentionAnalysis = response.data.mention_analysis
       console.log('[TeamsView] Messages list:', messagesList.length, messagesList)
+      console.log('[TeamsView] Mention analysis:', mentionAnalysis)
+      
+      // Helper function to check if message mentions user
+      const isMentioned = (message) => {
+        if (!analyzeMentions) return false
+        // First check the is_mentioned flag from backend
+        if (message.is_mentioned === true) return true
+        // Fallback: check content directly
+        const content = (message.content || '').toLowerCase()
+        return content.includes('@shubham') || 
+               content.includes('shubham garg') || 
+               content.includes('shubham.garg') ||
+               (mentionAnalysis?.unanswered_mentions || []).some(m => m.message_id === message.message_id)
+      }
       
       // Sort messages by criticality and urgency (highest first)
       const sortedMessages = [...messagesList].sort((a, b) => {
-        // First, prioritize "blocked on us" and "waiting for us"
+        // Highest priority: Mentions when analyze_mentions is enabled
+        const aMentioned = isMentioned(a) ? 2000 : 0
+        const bMentioned = isMentioned(b) ? 2000 : 0
+        
+        // Second: "blocked on us" and "waiting for us"
         const aBlocked = a.priority_score?.blocked_on_us ? 1000 : 0
         const bBlocked = b.priority_score?.blocked_on_us ? 1000 : 0
         const aWaiting = a.priority_score?.waiting_for_us ? 500 : 0
@@ -130,9 +149,13 @@ const TeamsView = () => {
         const aPriority = a.priority_score?.priority_score || 0
         const bPriority = b.priority_score?.priority_score || 0
         
+        // Then by unread status (unread first)
+        const aUnread = !a.is_read ? 50 : 0
+        const bUnread = !b.is_read ? 50 : 0
+        
         // Calculate total score
-        const aTotal = aBlocked + aWaiting + aCriticality + aUrgency + aPriority
-        const bTotal = bBlocked + bWaiting + bCriticality + bUrgency + bPriority
+        const aTotal = aMentioned + aBlocked + aWaiting + aCriticality + aUrgency + aPriority + aUnread
+        const bTotal = bMentioned + bBlocked + bWaiting + bCriticality + bUrgency + bPriority + bUnread
         
         return bTotal - aTotal // Descending order (highest first)
       })

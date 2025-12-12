@@ -30,6 +30,7 @@ import SummarizeIcon from '@mui/icons-material/Summarize'
 import HistoryIcon from '@mui/icons-material/History'
 import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
 import { transcriptionAPI, aiAPI, exportAPI, emailAPI, todoAPI } from '../services/api'
 import SendIcon from '@mui/icons-material/Send'
 import EmailIcon from '@mui/icons-material/Email'
@@ -85,13 +86,20 @@ const TranscriptionView = () => {
   const getNavTab = useCallback(() => {
     if (location.pathname === '/transcription') return 'transcription'
     if (location.pathname === '/meetings') return 'meetings'
+    if (location.pathname === '/analyze-transcript') return 'analyze-transcript'
     return 'transcription'
   }, [location.pathname])
   const [navTab, setNavTab] = useState(() => {
     if (location.pathname === '/transcription') return 'transcription'
     if (location.pathname === '/meetings') return 'meetings'
+    if (location.pathname === '/analyze-transcript') return 'analyze-transcript'
     return 'transcription'
   })
+  
+  // State for analyze transcript tab
+  const [uploadedFile, setUploadedFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadTitle, setUploadTitle] = useState('')
   
   // Use design system functions for card backgrounds
   const cardBackground = getCardBackground(mode)
@@ -695,7 +703,7 @@ const TranscriptionView = () => {
       
       // Fetch the final transcript from the API in case WebSocket message was missed
       // Try multiple times with increasing delays
-      let finalTranscriptFetched = false
+      let finalTranscriptFetched = null
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)))
@@ -707,8 +715,8 @@ const TranscriptionView = () => {
               if (!hasUserEdited) {
                 setEditedTranscript(finalTranscript)
               }
+              finalTranscriptFetched = finalTranscript
               console.log('[Transcription] Fetched final transcript from API (attempt ' + (attempt + 1) + '):', finalTranscript.substring(0, 100))
-              finalTranscriptFetched = true
               break // Success, no need to retry
             }
           }
@@ -722,18 +730,22 @@ const TranscriptionView = () => {
       }
       
       // Automatically generate insights after stopping recording
-      // Use the transcript we have (either from state or fetched)
-      const transcriptToUse = fullTranscript || editedTranscript || transcript
+      // Use the fetched transcript, or fall back to state variables
+      const transcriptToUse = finalTranscriptFetched || fullTranscript || editedTranscript || transcript
       if (transcriptToUse && transcriptToUse.trim() && transcriptToUse.length > 10) {
         console.log('[Transcription] Auto-generating insights after recording stopped...')
+        console.log('[Transcription] Transcript length:', transcriptToUse.length)
         try {
-          // Wait a bit more to ensure backend has processed everything
-          await new Promise(resolve => setTimeout(resolve, 2000))
+          // Wait a bit more to ensure backend has processed everything and session is saved
+          await new Promise(resolve => setTimeout(resolve, 3000))
           
-          // Save the edited transcript first if it's different from the stored one
-          if (editedTranscript && editedTranscript !== fullTranscript) {
+          // Ensure transcript is saved to backend before generating insights
+          if (finalTranscriptFetched) {
+            await saveTranscript(finalTranscriptFetched)
+            await new Promise(resolve => setTimeout(resolve, 1000))
+          } else if (editedTranscript && editedTranscript !== fullTranscript) {
             await saveTranscript(editedTranscript)
-            await new Promise(resolve => setTimeout(resolve, 500))
+            await new Promise(resolve => setTimeout(resolve, 1000))
           }
           
           console.log(`[Auto-Generate Insights] Calling API for session: ${sessionId}`)
@@ -747,18 +759,22 @@ const TranscriptionView = () => {
             setEditedEmailDraft(response.data.email_draft)
             setRisks(response.data.risks || [])
             console.log('[Auto-Generate Insights] Successfully generated insights')
+            setError(null) // Clear any previous errors
           } else {
             console.warn('[Auto-Generate Insights] Invalid response from server')
+            setError('Failed to generate insights: Invalid response from server')
           }
         } catch (err) {
           console.error('[Auto-Generate Insights] Error:', err)
-          // Don't show error to user - insights generation is automatic and non-critical
-          // The user can still manually view the transcript
           const errorMessage = err.response?.data?.detail || err.response?.data?.message || err.message || 'Unknown error'
-          console.warn(`[Auto-Generate Insights] Failed to auto-generate insights: ${errorMessage}`)
+          const statusCode = err.response?.status
+          console.warn(`[Auto-Generate Insights] Failed to auto-generate insights: ${errorMessage} (Status: ${statusCode})`)
+          // Show error to user so they know insights weren't generated
+          setError(`Failed to auto-generate insights: ${errorMessage}. You can try generating them manually.`)
         }
       } else {
-        console.warn('[Auto-Generate Insights] Skipping - transcript too short or empty')
+        console.warn('[Auto-Generate Insights] Skipping - transcript too short or empty. Length:', transcriptToUse?.length || 0)
+        setError('Transcript is too short or empty. Insights cannot be generated.')
       }
     } catch (err) {
       setError('Failed to stop transcription: ' + err.message)
@@ -902,6 +918,72 @@ const TranscriptionView = () => {
       navigate('/meetings')
     } else if (newValue === 'transcription') {
       navigate('/transcription')
+    } else if (newValue === 'analyze-transcript') {
+      navigate('/analyze-transcript')
+    }
+  }
+  
+  const handleFileUpload = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    
+    setUploadedFile(file)
+    setUploadTitle(file.name.replace(/\.[^/.]+$/, '')) // Use filename without extension as default title
+  }
+  
+  const handleUploadAndAnalyze = async () => {
+    if (!uploadedFile) {
+      setError('Please select a transcript file to upload')
+      return
+    }
+    
+    setUploading(true)
+    setError(null)
+    setLoading(true)
+    
+    try {
+      const response = await transcriptionAPI.uploadTranscript(uploadedFile, uploadTitle || undefined)
+      const newSessionId = response.data.id
+      
+      // Set the session ID and load transcript
+      setSessionId(newSessionId)
+      setTitle(response.data.title)
+      setFullTranscript(response.data.transcript)
+      setEditedTranscript(response.data.transcript)
+      setShowOptions(false)
+      
+      // Wait a bit for state to update
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      // Automatically generate insights using the session ID
+      try {
+        console.log('[Upload] Auto-generating insights for session:', newSessionId)
+        const insightsResponse = await aiAPI.processTranscript(newSessionId, true, true)
+        console.log('[Upload] Insights response:', insightsResponse.data)
+        
+        if (insightsResponse && insightsResponse.data) {
+          setMom(insightsResponse.data.mom)
+          setFaqs(insightsResponse.data.faqs || [])
+          setEmailDraft(insightsResponse.data.email_draft)
+          setEditedEmailDraft(insightsResponse.data.email_draft)
+          setRisks(insightsResponse.data.risks || [])
+          console.log('[Upload] Successfully generated insights')
+        }
+      } catch (insightsErr) {
+        console.warn('[Upload] Error generating insights:', insightsErr)
+        // Don't fail the whole upload if insights fail
+        setError('Transcript uploaded successfully, but failed to generate insights. You can generate them manually.')
+      }
+      
+      // Switch to transcription tab to show results
+      setNavTab('transcription')
+      navigate('/transcription')
+    } catch (err) {
+      const errorMsg = err.response?.data?.detail || err.message || 'Failed to upload transcript'
+      setError(errorMsg)
+    } finally {
+      setUploading(false)
+      setLoading(false)
     }
   }
 
@@ -947,21 +1029,103 @@ const TranscriptionView = () => {
                 },
               }}
             />
+            <Tab
+              icon={<UploadFileIcon />}
+              iconPosition="start"
+              label="Analyze Transcript"
+              value="analyze-transcript"
+              sx={{
+                '&.Mui-selected': {
+                  color: 'primary.main',
+                },
+              }}
+            />
           </Tabs>
         </Box>
       )}
 
-      <Typography 
-        variant="h4" 
-        gutterBottom
-        sx={{ 
-          mb: 3,
-          fontWeight: 700,
-          color: 'text.primary',
-        }}
-      >
-        Real-Time Transcription
-      </Typography>
+      {navTab !== 'analyze-transcript' && (
+        <Typography 
+          variant="h4" 
+          gutterBottom
+          sx={{ 
+            mb: 3,
+            fontWeight: 700,
+            color: 'text.primary',
+          }}
+        >
+          Real-Time Transcription
+        </Typography>
+      )}
+
+      {/* Analyze Transcript Tab Content */}
+      {navTab === 'analyze-transcript' && (
+        <Card
+          sx={{
+            background: cardBackground,
+            p: 4,
+            borderRadius: 2,
+            boxShadow: mode === 'dark' 
+              ? '0 4px 16px rgba(0, 0, 0, 0.3)'
+              : '0 4px 16px rgba(0, 0, 0, 0.1)',
+            mb: 4,
+          }}
+        >
+          <Typography variant="h5" gutterBottom sx={{ mb: 3, fontWeight: 600 }}>
+            Upload Transcript File
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            Upload a transcript file from Teams or any text file to generate insights, MOM, FAQs, and action items.
+          </Typography>
+          
+          <Box sx={{ mb: 3 }}>
+            <TextField
+              fullWidth
+              label="Meeting Title (Optional)"
+              value={uploadTitle}
+              onChange={(e) => setUploadTitle(e.target.value)}
+              placeholder="Enter meeting title or leave empty to use filename"
+              sx={{ mb: 2 }}
+            />
+            
+            <input
+              accept=".txt,.md,.doc,.docx"
+              style={{ display: 'none' }}
+              id="transcript-file-upload"
+              type="file"
+              onChange={handleFileUpload}
+            />
+            <label htmlFor="transcript-file-upload">
+              <Button
+                variant="outlined"
+                component="span"
+                startIcon={<UploadFileIcon />}
+                fullWidth
+                sx={{ mb: 2, py: 1.5 }}
+              >
+                {uploadedFile ? uploadedFile.name : 'Select Transcript File'}
+              </Button>
+            </label>
+            
+            {uploadedFile && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                File selected: {uploadedFile.name} ({(uploadedFile.size / 1024).toFixed(2)} KB)
+              </Alert>
+            )}
+            
+            <Button
+              variant="contained"
+              fullWidth
+              onClick={handleUploadAndAnalyze}
+              disabled={!uploadedFile || uploading}
+              startIcon={uploading ? <CircularProgress size={20} /> : <SummarizeIcon />}
+              sx={{ py: 1.5 }}
+            >
+              {uploading ? 'Uploading and Analyzing...' : 'Upload & Generate Insights'}
+            </Button>
+          </Box>
+        </Card>
+      )}
 
       {error && (
         <Alert 
@@ -980,7 +1144,7 @@ const TranscriptionView = () => {
       {!sessionId && !isRecording && showOptions && (
         <>
           <Grid container spacing={3} sx={{ mb: 4 }}>
-            <Grid item xs={12} md={6}>
+            <Grid item xs={12} md={4}>
               <Card
                 sx={{
                   height: '100%',
@@ -1036,7 +1200,7 @@ const TranscriptionView = () => {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={6}>
+            <Grid item xs={12} md={4}>
               <Card
                 sx={{
                   height: '100%',
@@ -1088,6 +1252,65 @@ const TranscriptionView = () => {
                     }}
                   >
                     Browse past meetings, MOMs, FAQs, and follow-up emails
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Card
+                sx={{
+                  height: '100%',
+                  background: cardBackground,
+                  borderLeft: '4px solid',
+                  borderLeftColor: 'warning.main',
+                  transition: 'all 0.3s ease',
+                  cursor: 'pointer',
+                  '&:hover': {
+                    transform: 'translateY(-4px)',
+                    boxShadow: mode === 'dark' 
+                      ? '0 4px 16px rgba(255, 152, 0, 0.25)'
+                      : '0 4px 16px rgba(255, 152, 0, 0.15)',
+                  },
+                }}
+                onClick={() => {
+                  setNavTab('analyze-transcript')
+                  navigate('/analyze-transcript')
+                }}
+              >
+                <CardContent sx={{ p: { xs: 2, sm: 2.5, md: 3 }, textAlign: 'center' }}>
+                  <Box
+                    sx={{
+                      p: 2,
+                      borderRadius: 2,
+                      bgcolor: 'warning.main',
+                      color: 'white',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      mb: 2,
+                      boxShadow: '0 2px 8px rgba(255, 152, 0, 0.2)',
+                    }}
+                  >
+                    <UploadFileIcon sx={{ fontSize: '2rem' }} />
+                  </Box>
+                  <Typography 
+                    variant="h5" 
+                    sx={{ 
+                      fontWeight: 600,
+                      color: 'text.primary',
+                      mb: 1,
+                    }}
+                  >
+                    Analyze Transcript
+                  </Typography>
+                  <Typography 
+                    variant="body2" 
+                    color="text.secondary"
+                    sx={{ 
+                      lineHeight: 1.7,
+                    }}
+                  >
+                    Upload a transcript file from Teams to generate insights and action items
                   </Typography>
                 </CardContent>
               </Card>

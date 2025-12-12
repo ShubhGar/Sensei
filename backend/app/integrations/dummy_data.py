@@ -143,12 +143,12 @@ def generate_dummy_emails(max_results: int = 50, unread_only: bool = False) -> L
 
 
 def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
-    """Generate dummy Teams chat messages"""
+    """Generate dummy Teams chat messages with Indian names and realistic conversations"""
     dummy_messages = [
         {
             "chat_id": "dummy-chat-1",
             "message_id": "dummy-msg-1",
-            "sender": "Sarah Johnson",
+            "sender": "Priya Sharma",
             "content": "Hey team, can we move the standup to 10 AM tomorrow?",
             "sent_at": (datetime.now() - timedelta(hours=1)).isoformat(),
             "is_read": False
@@ -156,23 +156,31 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-1",
             "message_id": "dummy-msg-2",
-            "sender": "Michael Chen",
+            "sender": "Rahul Gupta",
             "content": "Sure, that works for me!",
             "sent_at": (datetime.now() - timedelta(minutes=50)).isoformat(),
             "is_read": True
         },
         {
+            "chat_id": "dummy-chat-1",
+            "message_id": "dummy-msg-2a",
+            "sender": "Shubham Garg",
+            "content": "Yes, 10 AM is fine with me 👍",
+            "sent_at": (datetime.now() - timedelta(minutes=48)).isoformat(),
+            "is_read": True
+        },
+        {
             "chat_id": "dummy-chat-2",
             "message_id": "dummy-msg-3",
-            "sender": "Emily Rodriguez",
-            "content": "URGENT: The client is asking for an update on the project status. Can someone provide a quick summary?",
+            "sender": "Anjali Patel",
+            "content": "URGENT: The client is asking for an update on the project status. @Shubham Garg can you provide a quick summary?",
             "sent_at": (datetime.now() - timedelta(minutes=30)).isoformat(),
             "is_read": False
         },
         {
             "chat_id": "dummy-chat-3",
             "message_id": "dummy-msg-4",
-            "sender": "David Kim",
+            "sender": "Vikram Singh",
             "content": "I've completed the code review. Everything looks good! Ready to merge.",
             "sent_at": (datetime.now() - timedelta(hours=2)).isoformat(),
             "is_read": True
@@ -180,7 +188,7 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-4",
             "message_id": "dummy-msg-5",
-            "sender": "Lisa Wang",
+            "sender": "Kavita Reddy",
             "content": "The demo is scheduled for Friday at 2 PM. Please confirm your attendance.",
             "sent_at": (datetime.now() - timedelta(hours=3)).isoformat(),
             "is_read": False
@@ -188,15 +196,15 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-5",
             "message_id": "dummy-msg-6",
-            "sender": "Robert Taylor",
-            "content": "ASAP: We need to fix the bug in production. Can someone take a look?",
+            "sender": "Arjun Mehta",
+            "content": "ASAP: We need to fix the bug in production. @Shubham Garg can you take a look? It's related to the CheckoutPro SDK.",
             "sent_at": (datetime.now() - timedelta(minutes=15)).isoformat(),
             "is_read": False
         },
         {
             "chat_id": "dummy-chat-6",
             "message_id": "dummy-msg-7",
-            "sender": "Jennifer Martinez",
+            "sender": "Neha Kapoor",
             "content": "Thanks for the great work on the last sprint! The client is very happy with the results.",
             "sent_at": (datetime.now() - timedelta(hours=5)).isoformat(),
             "is_read": True
@@ -204,15 +212,15 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-7",
             "message_id": "dummy-msg-8",
-            "sender": "Alex Thompson",
-            "content": "I'm blocked on the API integration. Can someone help me troubleshoot?",
+            "sender": "Rohit Kumar",
+            "content": "I'm blocked on the API integration. @Shubham Garg can you help me troubleshoot?",
             "sent_at": (datetime.now() - timedelta(hours=4)).isoformat(),
             "is_read": False
         },
         {
             "chat_id": "dummy-chat-8",
             "message_id": "dummy-msg-9",
-            "sender": "Sarah Johnson",
+            "sender": "Sneha Desai",
             "content": "The deadline for the quarterly report is approaching. Let's make sure we're on track.",
             "sent_at": (datetime.now() - timedelta(hours=6)).isoformat(),
             "is_read": True
@@ -220,7 +228,7 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-9",
             "message_id": "dummy-msg-10",
-            "sender": "Michael Chen",
+            "sender": "Amit Joshi",
             "content": "Action required: Please review the new feature proposal and provide feedback by end of day.",
             "sent_at": (datetime.now() - timedelta(hours=2, minutes=30)).isoformat(),
             "is_read": False
@@ -228,7 +236,7 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-10",
             "message_id": "dummy-msg-11",
-            "sender": "Emily Rodriguez",
+            "sender": "Divya Nair",
             "content": "Great job on the presentation today! The stakeholders were impressed.",
             "sent_at": (datetime.now() - timedelta(hours=8)).isoformat(),
             "is_read": True
@@ -236,7 +244,7 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-11",
             "message_id": "dummy-msg-12",
-            "sender": "David Kim",
+            "sender": "Rajesh Iyer",
             "content": "IMMEDIATE: The server is down. Investigating the issue now.",
             "sent_at": (datetime.now() - timedelta(minutes=5)).isoformat(),
             "is_read": False
@@ -244,7 +252,7 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-12",
             "message_id": "dummy-msg-13",
-            "sender": "Lisa Wang",
+            "sender": "Pooja Agarwal",
             "content": "The client meeting has been rescheduled to next Tuesday at 3 PM. Please update your calendars.",
             "sent_at": (datetime.now() - timedelta(hours=7)).isoformat(),
             "is_read": True
@@ -252,7 +260,7 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-13",
             "message_id": "dummy-msg-14",
-            "sender": "Robert Taylor",
+            "sender": "Manish Verma",
             "content": "Can someone review the deployment checklist? We're planning to deploy tomorrow morning.",
             "sent_at": (datetime.now() - timedelta(hours=9)).isoformat(),
             "is_read": False
@@ -260,7 +268,7 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-14",
             "message_id": "dummy-msg-15",
-            "sender": "Jennifer Martinez",
+            "sender": "Swati Mishra",
             "content": "The quarterly review presentation is ready. I've shared it in the team folder.",
             "sent_at": (datetime.now() - timedelta(hours=10)).isoformat(),
             "is_read": True
@@ -268,50 +276,66 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
         {
             "chat_id": "dummy-chat-15",
             "message_id": "dummy-msg-16",
-            "sender": "Alex Thompson",
+            "sender": "Nikhil Shah",
             "content": "URGENT: We need approval for the budget increase. Deadline is today at 5 PM.",
             "sent_at": (datetime.now() - timedelta(minutes=20)).isoformat(),
             "is_read": False
         },
         {
-            "chat_id": "dummy-chat-1",
+            "chat_id": "dummy-chat-16",
             "message_id": "dummy-msg-17",
-            "sender": "Emily Rodriguez",
+            "sender": "Shubham Garg",
             "content": "I've updated the project timeline. The new deadline is December 15th.",
             "sent_at": (datetime.now() - timedelta(hours=11)).isoformat(),
             "is_read": True
         },
         {
-            "chat_id": "dummy-chat-2",
+            "chat_id": "dummy-chat-17",
             "message_id": "dummy-msg-18",
-            "sender": "Michael Chen",
+            "sender": "Aditya Rao",
             "content": "The API documentation has been updated. Check the wiki for the latest changes.",
             "sent_at": (datetime.now() - timedelta(hours=13)).isoformat(),
             "is_read": True
         },
         {
-            "chat_id": "dummy-chat-3",
+            "chat_id": "dummy-chat-18",
             "message_id": "dummy-msg-19",
-            "sender": "Sarah Johnson",
-            "content": "ASAP: The production issue has been escalated. We need all hands on deck.",
+            "sender": "Kiran Malhotra",
+            "content": "ASAP: The production issue has been escalated. We need all hands on deck. @Shubham Garg your expertise on this would be helpful.",
             "sent_at": (datetime.now() - timedelta(minutes=3)).isoformat(),
             "is_read": False
         },
         {
-            "chat_id": "dummy-chat-4",
+            "chat_id": "dummy-chat-19",
             "message_id": "dummy-msg-20",
-            "sender": "David Kim",
+            "sender": "Tanvi Chawla",
             "content": "The code review is complete. All tests are passing. Ready for merge.",
             "sent_at": (datetime.now() - timedelta(hours=14)).isoformat(),
             "is_read": True
         },
         {
-            "chat_id": "dummy-chat-5",
+            "chat_id": "dummy-chat-20",
             "message_id": "dummy-msg-21",
-            "sender": "Lisa Wang",
+            "sender": "Harsh Tiwari",
             "content": "Action required: Please submit your time-off requests for December by Friday.",
             "sent_at": (datetime.now() - timedelta(hours=15)).isoformat(),
             "is_read": False
+        },
+        {
+            "chat_id": "dummy-chat-21",
+            "message_id": "dummy-msg-22",
+            "sender": "Isha Bansal",
+            "content": "Hey @Shubham Garg, can you share the status update on the wallet SDK documentation?",
+            "sent_at": (datetime.now() - timedelta(minutes=45)).isoformat(),
+            "is_read": False
+        },
+        {
+            "chat_id": "dummy-chat-22",
+            "message_id": "dummy-msg-23",
+            "sender": "Varun Agarwal",
+            "content": "Thanks Shubham for the quick fix yesterday! Really helped us unblock the deployment.",
+            "sent_at": (datetime.now() - timedelta(hours=1, minutes=30)).isoformat(),
+            "is_read": True
         }
     ]
     
@@ -319,12 +343,12 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
 
 
 def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: int = 50) -> List[Dict[str, Any]]:
-    """Generate dummy Teams channel messages"""
+    """Generate dummy Teams channel messages with Indian names and realistic conversations"""
     dummy_messages = [
         {
             "message_id": "dummy-channel-msg-1",
             "channel_id": channel_id,
-            "sender": "Sarah Johnson",
+            "sender": "Priya Sharma",
             "content": "Welcome to the project channel! Let's use this space for updates and discussions.",
             "sent_at": (datetime.now() - timedelta(hours=1)).isoformat(),
             "is_reply": False,
@@ -333,7 +357,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-2",
             "channel_id": channel_id,
-            "sender": "Michael Chen",
+            "sender": "Rahul Gupta",
             "content": "Thanks! I'll post weekly updates here every Monday.",
             "sent_at": (datetime.now() - timedelta(minutes=55)).isoformat(),
             "is_reply": True,
@@ -342,8 +366,8 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-3",
             "channel_id": channel_id,
-            "sender": "Emily Rodriguez",
-            "content": "URGENT: We need to address the performance issues before the next release. Can everyone prioritize this?",
+            "sender": "Anjali Patel",
+            "content": "URGENT: We need to address the performance issues before the next release. Can everyone prioritize this? @Shubham Garg can you take a look?",
             "sent_at": (datetime.now() - timedelta(minutes=30)).isoformat(),
             "is_reply": False,
             "is_read": False
@@ -351,7 +375,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-4",
             "channel_id": channel_id,
-            "sender": "David Kim",
+            "sender": "Vikram Singh",
             "content": "I've started working on it. Should have a fix ready by tomorrow.",
             "sent_at": (datetime.now() - timedelta(minutes=25)).isoformat(),
             "is_reply": True,
@@ -360,7 +384,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-5",
             "channel_id": channel_id,
-            "sender": "Lisa Wang",
+            "sender": "Kavita Reddy",
             "content": "The sprint planning meeting is scheduled for this Friday. Please come prepared with your capacity estimates.",
             "sent_at": (datetime.now() - timedelta(hours=2)).isoformat(),
             "is_reply": False,
@@ -369,7 +393,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-6",
             "channel_id": channel_id,
-            "sender": "Robert Taylor",
+            "sender": "Arjun Mehta",
             "content": "ASAP: Client is requesting a demo. Can we schedule it for this week?",
             "sent_at": (datetime.now() - timedelta(minutes=10)).isoformat(),
             "is_reply": False,
@@ -378,7 +402,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-7",
             "channel_id": channel_id,
-            "sender": "Jennifer Martinez",
+            "sender": "Neha Kapoor",
             "content": "I can do Thursday afternoon. Does that work for everyone?",
             "sent_at": (datetime.now() - timedelta(minutes=8)).isoformat(),
             "is_reply": True,
@@ -387,7 +411,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-8",
             "channel_id": channel_id,
-            "sender": "Alex Thompson",
+            "sender": "Rohit Kumar",
             "content": "The new feature is ready for testing. Please review the PR when you have a chance.",
             "sent_at": (datetime.now() - timedelta(hours=3)).isoformat(),
             "is_reply": False,
@@ -396,7 +420,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-9",
             "channel_id": channel_id,
-            "sender": "Sarah Johnson",
+            "sender": "Sneha Desai",
             "content": "Action required: Please update your status in the project tracker by end of day.",
             "sent_at": (datetime.now() - timedelta(hours=4)).isoformat(),
             "is_reply": False,
@@ -405,7 +429,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-10",
             "channel_id": channel_id,
-            "sender": "Michael Chen",
+            "sender": "Amit Joshi",
             "content": "Great work on the last deployment! Everything went smoothly.",
             "sent_at": (datetime.now() - timedelta(hours=5)).isoformat(),
             "is_reply": False,
@@ -414,7 +438,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-11",
             "channel_id": channel_id,
-            "sender": "Emily Rodriguez",
+            "sender": "Divya Nair",
             "content": "The sprint retrospective is scheduled for Friday at 2 PM. Please come prepared with your feedback.",
             "sent_at": (datetime.now() - timedelta(hours=6)).isoformat(),
             "is_reply": False,
@@ -423,7 +447,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-12",
             "channel_id": channel_id,
-            "sender": "David Kim",
+            "sender": "Rajesh Iyer",
             "content": "I've fixed the bug in the authentication module. The fix is in PR #1234.",
             "sent_at": (datetime.now() - timedelta(hours=7)).isoformat(),
             "is_reply": False,
@@ -432,7 +456,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-13",
             "channel_id": channel_id,
-            "sender": "Lisa Wang",
+            "sender": "Pooja Agarwal",
             "content": "URGENT: The client demo has been moved to tomorrow. Can everyone confirm availability?",
             "sent_at": (datetime.now() - timedelta(minutes=12)).isoformat(),
             "is_reply": False,
@@ -441,7 +465,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-14",
             "channel_id": channel_id,
-            "sender": "Robert Taylor",
+            "sender": "Manish Verma",
             "content": "I'm available. What time is the demo?",
             "sent_at": (datetime.now() - timedelta(minutes=10)).isoformat(),
             "is_reply": True,
@@ -450,7 +474,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-15",
             "channel_id": channel_id,
-            "sender": "Jennifer Martinez",
+            "sender": "Swati Mishra",
             "content": "The demo is at 3 PM. I'll send the agenda shortly.",
             "sent_at": (datetime.now() - timedelta(minutes=8)).isoformat(),
             "is_reply": True,
@@ -459,7 +483,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-16",
             "channel_id": channel_id,
-            "sender": "Alex Thompson",
+            "sender": "Nikhil Shah",
             "content": "The new feature branch is ready for testing. QA team, please start your review.",
             "sent_at": (datetime.now() - timedelta(hours=8)).isoformat(),
             "is_reply": False,
@@ -468,7 +492,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-17",
             "channel_id": channel_id,
-            "sender": "Sarah Johnson",
+            "sender": "Aditya Rao",
             "content": "Action required: Please update your project status in the tracker by end of day.",
             "sent_at": (datetime.now() - timedelta(hours=9)).isoformat(),
             "is_reply": False,
@@ -477,7 +501,7 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-18",
             "channel_id": channel_id,
-            "sender": "Michael Chen",
+            "sender": "Kiran Malhotra",
             "content": "The infrastructure monitoring dashboard is now live. Check it out!",
             "sent_at": (datetime.now() - timedelta(hours=10)).isoformat(),
             "is_reply": False,
@@ -486,8 +510,8 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-19",
             "channel_id": channel_id,
-            "sender": "Emily Rodriguez",
-            "content": "ASAP: We need to address the security vulnerability found in the latest scan. Priority fix needed.",
+            "sender": "Tanvi Chawla",
+            "content": "ASAP: We need to address the security vulnerability found in the latest scan. Priority fix needed. @Shubham Garg your expertise would be helpful here.",
             "sent_at": (datetime.now() - timedelta(minutes=7)).isoformat(),
             "is_reply": False,
             "is_read": False
@@ -495,10 +519,28 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
         {
             "message_id": "dummy-channel-msg-20",
             "channel_id": channel_id,
-            "sender": "David Kim",
+            "sender": "Shubham Garg",
             "content": "I'm on it. Should have a patch ready within the hour.",
             "sent_at": (datetime.now() - timedelta(minutes=5)).isoformat(),
             "is_reply": True,
+            "is_read": True
+        },
+        {
+            "message_id": "dummy-channel-msg-21",
+            "channel_id": channel_id,
+            "sender": "Harsh Tiwari",
+            "content": "Hey @Shubham Garg, can you share the status on the CheckoutPro SDK integration?",
+            "sent_at": (datetime.now() - timedelta(minutes=2)).isoformat(),
+            "is_reply": False,
+            "is_read": False
+        },
+        {
+            "message_id": "dummy-channel-msg-22",
+            "channel_id": channel_id,
+            "sender": "Isha Bansal",
+            "content": "Thanks Shubham for helping with the deployment yesterday! Really appreciate it.",
+            "sent_at": (datetime.now() - timedelta(hours=1, minutes=15)).isoformat(),
+            "is_reply": False,
             "is_read": True
         }
     ]
@@ -507,62 +549,62 @@ def generate_dummy_channel_messages(team_id: str, channel_id: str, max_results: 
 
 
 def generate_dummy_joined_teams(max_results: int = 100) -> List[Dict[str, Any]]:
-    """Generate dummy Teams that the user is a member of"""
+    """Generate dummy Teams that the user is a member of with Indian context"""
     dummy_teams = [
         {
-            "id": "dummy-team-1",
-            "displayName": "Engineering Team",
-            "description": "Main engineering team for product development",
-            "internalId": "19:engineering-team@example.com",
+            "id": "dummy-team-engineering",
+            "displayName": "PayU Engineering Team",
+            "description": "Main engineering team for product development - CheckoutPro SDK, Payment Gateway",
+            "internalId": "19:payu-engineering@payu.in",
             "visibility": "private"
         },
         {
-            "id": "dummy-team-2",
-            "displayName": "Product Launch 2024",
-            "description": "Cross-functional team for Q4 product launch",
-            "internalId": "19:product-launch-2024@example.com",
+            "id": "dummy-team-checkoutpro",
+            "displayName": "CheckoutPro SDK Team",
+            "description": "Cross-functional team for CheckoutPro SDK development and integration",
+            "internalId": "19:checkoutpro-sdk@payu.in",
             "visibility": "private"
         },
         {
-            "id": "dummy-team-3",
-            "displayName": "Sales & Marketing",
-            "description": "Sales and marketing collaboration space",
-            "internalId": "19:sales-marketing@example.com",
+            "id": "dummy-team-payments",
+            "displayName": "Payments & Integration",
+            "description": "Payment gateway integration and merchant onboarding team",
+            "internalId": "19:payments-integration@payu.in",
             "visibility": "private"
         },
         {
-            "id": "dummy-team-4",
-            "displayName": "Customer Success",
-            "description": "Customer success and support team",
-            "internalId": "19:customer-success@example.com",
+            "id": "dummy-team-support",
+            "displayName": "Customer Support - India",
+            "description": "Customer success and support team for Indian market",
+            "internalId": "19:support-india@payu.in",
             "visibility": "private"
         },
         {
-            "id": "dummy-team-5",
-            "displayName": "Company All Hands",
-            "description": "Company-wide announcements and discussions",
-            "internalId": "19:company-all-hands@example.com",
+            "id": "dummy-team-allhands",
+            "displayName": "PayU India - All Hands",
+            "description": "Company-wide announcements and discussions for PayU India",
+            "internalId": "19:payu-india-allhands@payu.in",
             "visibility": "public"
         },
         {
-            "id": "dummy-team-6",
-            "displayName": "Project Alpha",
-            "description": "Project Alpha development team",
-            "internalId": "19:project-alpha@example.com",
+            "id": "dummy-team-wallet",
+            "displayName": "Wallet SDK Team",
+            "description": "Mia Wallet SDK development and documentation team",
+            "internalId": "19:wallet-sdk@payu.in",
             "visibility": "private"
         },
         {
-            "id": "dummy-team-7",
-            "displayName": "Design & UX",
-            "description": "Design and user experience team",
-            "internalId": "19:design-ux@example.com",
+            "id": "dummy-team-design",
+            "displayName": "Design & UX - PayU",
+            "description": "Design and user experience team for PayU products",
+            "internalId": "19:design-ux-payu@payu.in",
             "visibility": "private"
         },
         {
-            "id": "dummy-team-8",
-            "displayName": "DevOps & Infrastructure",
-            "description": "DevOps and infrastructure management",
-            "internalId": "19:devops-infra@example.com",
+            "id": "dummy-team-devops",
+            "displayName": "DevOps & Infrastructure - India",
+            "description": "DevOps and infrastructure management for PayU India",
+            "internalId": "19:devops-india@payu.in",
             "visibility": "private"
         }
     ]

@@ -648,6 +648,7 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/transcription" element={<TranscriptionView />} />
+            <Route path="/analyze-transcript" element={<TranscriptionView />} />
             <Route path="/communications" element={<CommunicationsView />} />
             <Route path="/email" element={<EmailView />} />
             <Route path="/teams" element={<TeamsView />} />

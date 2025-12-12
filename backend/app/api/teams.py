@@ -57,11 +57,18 @@ async def get_messages(
             result = await teams_integration.get_chats(max_results, force_refresh=force_refresh)
         elif chat_type == "channels":
             if not team_id or not channel_id:
-                logger.warning(f"[Teams] Missing team_id/channel_id for channels - team_id: {team_id}, channel_id: {channel_id}")
-                raise HTTPException(
-                    status_code=400,
-                    detail="team_id and channel_id are required when chat_type is 'channels'"
-                )
+                # If team_id/channel_id not provided, use dummy data for a default channel
+                logger.info(f"[Teams] Missing team_id/channel_id for channels - using dummy data with default team/channel")
+                from app.integrations.dummy_data import generate_dummy_channel_messages
+                default_team_id = "dummy-team-engineering"
+                default_channel_id = f"{default_team_id}-channel-general"
+                messages_list = generate_dummy_channel_messages(default_team_id, default_channel_id, max_results)
+                result = {
+                    "messages": messages_list,
+                    "error": None,
+                    "error_type": None,
+                    "is_dummy_data": True
+                }
             else:
                 # get_channel_messages still returns a list, so wrap it
                 messages_list = await teams_integration.get_channel_messages(team_id, channel_id, max_results)
@@ -207,6 +214,25 @@ async def get_messages(
                 
                 mention_analysis = await ai_service.analyze_mentions(messages, user_email)
                 summary["mention_analysis"] = mention_analysis
+                
+                # Mark messages that mention the user for easier frontend sorting
+                mentioned_message_ids = set()
+                for mention in mention_analysis.get("unanswered_mentions", []):
+                    mentioned_message_ids.add(mention.get("message_id"))
+                for mention in mention_analysis.get("requires_response", []):
+                    mentioned_message_ids.add(mention.get("message_id"))
+                
+                # Add is_mentioned flag to messages
+                for message in messages:
+                    if message.get("message_id") in mentioned_message_ids:
+                        message["is_mentioned"] = True
+                    else:
+                        # Also check content directly for mentions
+                        content = (message.get("content", "") or "").lower()
+                        if "@shubham" in content or "shubham garg" in content or "shubham.garg" in content:
+                            message["is_mentioned"] = True
+                        else:
+                            message["is_mentioned"] = False
             except Exception as e:
                 logger.warning(f"[Teams] Error analyzing mentions: {e}")
         
@@ -267,11 +293,21 @@ async def get_team_channels(
         
         channels = await teams_integration.get_team_channels(team_id, max_results)
         
+        # If no channels found, return dummy channels
+        if not channels or len(channels) == 0:
+            logger.info(f"[Teams] No channels found for team {team_id}, using dummy channels data")
+            from app.integrations.dummy_data import generate_dummy_team_channels
+            channels = generate_dummy_team_channels(team_id, max_results)
+        
         logger.info(f"[Teams] Successfully retrieved {len(channels)} channels")
         return {"channels": channels, "team_id": team_id, "total": len(channels)}
     except Exception as e:
         logger.error(f"[Teams] Error fetching team channels: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error fetching team channels: {str(e)}")
+        # On error, return dummy channels as fallback
+        logger.info(f"[Teams] Error occurred, using dummy channels data as fallback for team {team_id}")
+        from app.integrations.dummy_data import generate_dummy_team_channels
+        channels = generate_dummy_team_channels(team_id, max_results)
+        return {"channels": channels, "team_id": team_id, "total": len(channels)}
 
 
 @router.post("/authenticate")

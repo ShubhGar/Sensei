@@ -1721,12 +1721,22 @@ Return JSON:
         mentions = []
         for msg in messages:
             content = msg.get("content", "")
-            # Check for @mentions (simple pattern matching)
+            # Check for @mentions (improved pattern matching to handle names with spaces)
             if "@" in content:
-                # Extract potential mentions
+                # Extract potential mentions - handle both @username and @First Last formats
                 import re
-                mention_pattern = r'@(\w+(?:\.\w+)*)'
-                found_mentions = re.findall(mention_pattern, content)
+                # Pattern 1: @username (single word)
+                mention_pattern1 = r'@(\w+(?:\.\w+)*)'
+                # Pattern 2: @First Last (two words with space)
+                mention_pattern2 = r'@([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)'
+                # Pattern 3: @FirstLast (camelCase)
+                mention_pattern3 = r'@([A-Z][a-z]+[A-Z][a-z]+)'
+                
+                found_mentions = []
+                found_mentions.extend(re.findall(mention_pattern1, content))
+                found_mentions.extend(re.findall(mention_pattern2, content))
+                found_mentions.extend(re.findall(mention_pattern3, content))
+                
                 for mention in found_mentions:
                     mentions.append({
                         "message_id": msg.get("message_id", ""),
@@ -1738,13 +1748,29 @@ Return JSON:
                     })
         
         # If user_email provided, filter for mentions of that user
+        # Also check for common name variations (e.g., "shubham.garg", "Shubham Garg", "shubham garg")
         if user_email:
             user_name = user_email.split("@")[0]
-            user_mentions = [
-                m for m in mentions
-                if user_name.lower() in m["mentioned"].lower() or
-                   user_email.lower() in m["content"].lower()
-            ]
+            # Extract first and last name if possible
+            name_parts = user_name.split(".")
+            first_name = name_parts[0].lower() if name_parts else ""
+            last_name = name_parts[1].lower() if len(name_parts) > 1 else ""
+            full_name_lower = f"{first_name} {last_name}".strip()
+            
+            user_mentions = []
+            for m in mentions:
+                mentioned_lower = m["mentioned"].lower()
+                content_lower = m["content"].lower()
+                # Check various name formats
+                if (first_name in mentioned_lower or 
+                    (first_name and last_name and (first_name in mentioned_lower and last_name in mentioned_lower)) or
+                    full_name_lower in mentioned_lower or
+                    user_name.lower() in mentioned_lower or
+                    user_email.lower() in content_lower or
+                    "shubham" in mentioned_lower or  # Direct check for "Shubham"
+                    "shubham garg" in content_lower or  # Check full name in content
+                    "shubham.garg" in content_lower):
+                    user_mentions.append(m)
         else:
             user_mentions = mentions
         

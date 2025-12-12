@@ -71,7 +71,15 @@ export const transcriptionAPI = {
   getSessionDetails: (sessionId) => api.get(`/api/transcribe/session/${sessionId}/details`),
   getTranscript: (sessionId) => api.get(`/api/transcribe/transcript/${sessionId}`),
   updateTranscript: (sessionId, transcript) => api.put(`/api/transcribe/transcript/${sessionId}`, { transcript }),
-  listMeetings: () => api.get('/api/transcribe/meetings')
+  listMeetings: () => api.get('/api/transcribe/meetings'),
+  uploadTranscript: (file, title) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (title) formData.append('title', title)
+    return api.post('/api/transcribe/upload-transcript', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  }
 }
 
 // AI Processing API

@@ -114,9 +114,29 @@ const EmailView = () => {
       const response = await emailAPI.getInbox(20, false, includeSentiment, true)
       const emailsList = response.data.emails || []
       
+      // Helper function to check if email mentions user (in To, CC, or body)
+      const isMentioned = (email) => {
+        const body = ((email.body || email.body_preview || '') + '').toLowerCase()
+        const subject = ((email.subject || '') + '').toLowerCase()
+        const to = ((email.to || '') + '').toLowerCase()
+        const cc = ((email.cc || '') + '').toLowerCase()
+        
+        // Check for various mention patterns
+        return body.includes('@shubham') || 
+               body.includes('shubham garg') || 
+               body.includes('shubham.garg') ||
+               subject.includes('shubham') ||
+               to.includes('shubham.garg') ||
+               cc.includes('shubham.garg')
+      }
+      
       // Sort emails by criticality and urgency (highest first)
       const sortedEmails = [...emailsList].sort((a, b) => {
-        // First, prioritize "blocked on us" and "waiting for us"
+        // Highest priority: Mentions of user
+        const aMentioned = isMentioned(a) ? 2000 : 0
+        const bMentioned = isMentioned(b) ? 2000 : 0
+        
+        // Second: "blocked on us" and "waiting for us"
         const aBlocked = a.priority_score?.blocked_on_us ? 1000 : 0
         const bBlocked = b.priority_score?.blocked_on_us ? 1000 : 0
         const aWaiting = a.priority_score?.waiting_for_us ? 500 : 0
@@ -134,9 +154,17 @@ const EmailView = () => {
         const aPriority = a.priority_score?.priority_score || 0
         const bPriority = b.priority_score?.priority_score || 0
         
+        // Then by unread status (unread first)
+        const aUnread = !a.is_read ? 50 : 0
+        const bUnread = !b.is_read ? 50 : 0
+        
+        // Then by importance (high importance first)
+        const aImportance = a.importance === 'high' ? 30 : (a.importance === 'low' ? 0 : 10)
+        const bImportance = b.importance === 'high' ? 30 : (b.importance === 'low' ? 0 : 10)
+        
         // Calculate total score
-        const aTotal = aBlocked + aWaiting + aCriticality + aUrgency + aPriority
-        const bTotal = bBlocked + bWaiting + bCriticality + bUrgency + bPriority
+        const aTotal = aMentioned + aBlocked + aWaiting + aCriticality + aUrgency + aPriority + aUnread + aImportance
+        const bTotal = bMentioned + bBlocked + bWaiting + bCriticality + bUrgency + bPriority + bUnread + bImportance
         
         return bTotal - aTotal // Descending order (highest first)
       })
