@@ -1017,8 +1017,35 @@ Provide categorization in JSON format:
                             context_str += f"  Completed: {todo['completed_at']}\n"
             else:
                 context_str += f"\n\n=== TODOS ===\nNo todos found in the system."
+            
+            # Add JIRA issues with details
+            if context.get("jira_issues"):
+                jira_issues = context["jira_issues"]
+                context_str += f"\n\n=== JIRA ISSUES ({len(jira_issues)} total) ===\n"
+                # Sort by urgency score (highest first)
+                sorted_issues = sorted(jira_issues, key=lambda x: x.get("urgency_score", 0), reverse=True)
+                for i, issue in enumerate(sorted_issues[:20], 1):  # Show up to 20 most urgent issues
+                    context_str += f"\nJIRA Issue {i}:\n"
+                    context_str += f"  Key: {issue.get('key', 'N/A')}\n"
+                    context_str += f"  Summary: {issue.get('summary', 'No summary')}\n"
+                    if issue.get("status"):
+                        context_str += f"  Status: {issue['status']}\n"
+                    if issue.get("priority"):
+                        context_str += f"  Priority: {issue['priority']}\n"
+                    if issue.get("issue_type"):
+                        context_str += f"  Type: {issue['issue_type']}\n"
+                    if issue.get("description"):
+                        context_str += f"  Description: {issue['description'][:200]}\n"
+                    if issue.get("due_date"):
+                        context_str += f"  Due Date: {issue['due_date']}\n"
+                    if issue.get("urgency_score", 0) > 0:
+                        context_str += f"  Urgency Score: {issue['urgency_score']}\n"
+                    if issue.get("updated_at"):
+                        context_str += f"  Last Updated: {issue['updated_at']}\n"
+            else:
+                context_str += f"\n\n=== JIRA ISSUES ===\nNo JIRA issues found in the system."
         
-        prompt = f"""You are an AI assistant helping users understand their meetings, emails, and work communications.
+        prompt = f"""You are an AI assistant helping users understand their meetings, emails, Teams messages, todos, and JIRA issues.
 
 You have access to the following information:
 {context_str}
@@ -1027,13 +1054,16 @@ User Question: {query}
 
 Instructions:
 - Use the provided context to answer the user's question accurately
-- Reference specific meetings, emails, messages, or todos by name/title when relevant
+- Reference specific meetings, emails, Teams messages, todos, or JIRA issues by name/title/key when relevant
 - If the user asks about todos, list ALL todos from the context (both active and completed if they ask for "all todos")
+- If the user asks about JIRA issues, list relevant issues with their keys, statuses, priorities, and urgency scores
 - When listing todos, organize them by priority (critical > high > medium > low) and show their titles, descriptions, and priorities
+- When listing JIRA issues, prioritize by urgency score and status (show blocked/in-progress issues first)
 - If the user asks about something not in the context, say so clearly
 - Provide actionable insights when possible
 - Be concise but thorough
-- If there are no todos and the user asks about them, clearly state that there are no todos in the system
+- Cross-reference data sources when relevant (e.g., if a JIRA issue is mentioned in a meeting or email)
+- If there are no todos/JIRA issues and the user asks about them, clearly state that there are none in the system
 
 Return JSON:
 {{
@@ -1113,9 +1143,14 @@ Return JSON:
     
     async def analyze_trends(
         self,
-        meetings: List[Dict[str, Any]]
+        meetings_data: List[Dict[str, Any]] = None,
+        emails_data: List[Dict[str, Any]] = None,
+        teams_data: List[Dict[str, Any]] = None,
+        todos_data: List[Dict[str, Any]] = None,
+        jira_data: List[Dict[str, Any]] = None,
+        meetings: List[Dict[str, Any]] = None  # Backward compatibility
     ) -> Dict[str, Any]:
-        """Analyze trends across multiple meetings"""
+        """Analyze trends across all available data sources (meetings, emails, teams, todos, JIRA)"""
         # Default empty response with all required fields
         default_response = {
             "trends": [],
@@ -1126,13 +1161,27 @@ Return JSON:
             "decision_patterns": None
         }
         
-        # Check if AI service is available
-        if (not self.client and not self.bedrock_service) or not meetings:
+        # Backward compatibility: if meetings parameter is provided, use it
+        if meetings is not None and meetings_data is None:
+            meetings_data = meetings
+        
+        # Normalize to empty lists if None
+        meetings_data = meetings_data or []
+        emails_data = emails_data or []
+        teams_data = teams_data or []
+        todos_data = todos_data or []
+        jira_data = jira_data or []
+        
+        # Check if AI service is available and we have some data
+        if not self.provider_manager.has_any_provider():
+            return default_response
+        
+        if not meetings_data and not emails_data and not teams_data and not todos_data and not jira_data:
             return default_response
         
         # Prepare meeting summaries
         meeting_summaries = []
-        for meeting in meetings[:10]:  # Limit to 10 most recent
+        for meeting in meetings_data[:10]:  # Limit to 10 most recent
             mom = meeting.get("mom", {})
             if isinstance(mom, str):
                 try:
@@ -1149,27 +1198,77 @@ Return JSON:
             }
             meeting_summaries.append(summary)
         
-        # If no valid meeting summaries, return default
-        if not meeting_summaries:
-            return default_response
+        # Prepare data summaries for AI analysis
+        data_summary = {
+            "meetings": {
+                "count": len(meeting_summaries),
+                "summaries": meeting_summaries
+            },
+            "emails": {
+                "count": len(emails_data),
+                "recent_subjects": [e.get("subject", "")[:100] for e in emails_data[:10]],
+                "high_importance_count": len([e for e in emails_data if e.get("importance") == "high"])
+            },
+            "teams_messages": {
+                "count": len(teams_data),
+                "recent_senders": list(set([t.get("sender", "") for t in teams_data[:20]]))
+            },
+            "todos": {
+                "count": len(todos_data),
+                "incomplete_count": len([t for t in todos_data if not t.get("is_completed", False)]),
+                "high_priority_count": len([t for t in todos_data if t.get("priority", "").lower() in ["high", "critical"]])
+            },
+            "jira_issues": {
+                "count": len(jira_data),
+                "statuses": list(set([j.get("status", "") for j in jira_data])),
+                "high_urgency_count": len([j for j in jira_data if j.get("urgency_score", 0) >= 70]),
+                "recent_issues": [{"key": j.get("key", ""), "summary": j.get("summary", "")[:100], "status": j.get("status", "")} for j in jira_data[:10]]
+            }
+        }
         
-        prompt = f"""Analyze trends across the following meetings:
+        prompt = f"""Analyze trends and patterns across all available work data:
 
-{json.dumps(meeting_summaries, indent=2)}
+MEETINGS ({data_summary['meetings']['count']} meetings):
+{json.dumps(meeting_summaries, indent=2) if meeting_summaries else "No meeting data"}
 
-Identify patterns, trends, and insights. Return JSON:
+EMAILS ({data_summary['emails']['count']} emails):
+- Recent subjects: {', '.join(data_summary['emails']['recent_subjects'][:5])}
+- High importance: {data_summary['emails']['high_importance_count']}
+
+TEAMS MESSAGES ({data_summary['teams_messages']['count']} messages):
+- Active participants: {', '.join(data_summary['teams_messages']['recent_senders'][:5])}
+
+TODOS ({data_summary['todos']['count']} todos):
+- Incomplete: {data_summary['todos']['incomplete_count']}
+- High priority: {data_summary['todos']['high_priority_count']}
+
+JIRA ISSUES ({data_summary['jira_issues']['count']} issues):
+- Statuses: {', '.join(data_summary['jira_issues']['statuses'][:5])}
+- High urgency: {data_summary['jira_issues']['high_urgency_count']}
+- Recent issues: {json.dumps(data_summary['jira_issues']['recent_issues'], indent=2) if data_summary['jira_issues']['recent_issues'] else 'None'}
+
+Identify cross-platform patterns, trends, and insights across all these data sources. Look for:
+- Common themes across meetings, emails, and Teams
+- Action items and their completion status
+- Priority patterns (high priority emails, urgent JIRA issues, high priority todos)
+- Workload distribution and bottlenecks
+- Communication patterns and collaboration trends
+
+Return JSON:
 {{
     "trends": [
-        {{"trend": "...", "description": "...", "impact": "high|medium|low"}}
+        {{"trend": "...", "description": "...", "impact": "high|medium|low", "data_sources": ["meetings", "emails", ...]}}
     ],
     "insights": ["insight1", "insight2", ...],
     "recommendations": ["recommendation1", "recommendation2", ...],
     "key_themes": ["theme1", "theme2", ...],
     "action_item_trends": "...",
-    "decision_patterns": "..."
+    "decision_patterns": "...",
+    "workload_analysis": "...",
+    "priority_patterns": "..."
 }}"""
 
-        system_prompt = "You are an expert at analyzing patterns and trends across multiple meetings."
+        system_prompt = "You are an expert at analyzing patterns and trends across multiple data sources including meetings, emails, Teams messages, todos, and JIRA issues. You identify cross-platform patterns and provide actionable insights."
 
         try:
             content = await self._call_ai(

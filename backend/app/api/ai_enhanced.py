@@ -247,6 +247,34 @@ async def chat_assistant(
             logger.warning(f"[Chat] Error loading todos: {e}")
             context["todos"] = []
         
+        # Fetch JIRA issues assigned to the user
+        try:
+            jira_issues = await jira_integration.get_assigned_issues(max_results=30)
+            jira_data = []
+            for issue in jira_issues:
+                issue_info = {
+                    "id": issue.get("id", ""),
+                    "key": issue.get("key", ""),
+                    "summary": issue.get("summary", ""),
+                    "description": issue.get("description", "")[:500] if issue.get("description") else "",
+                    "status": issue.get("status", ""),
+                    "priority": issue.get("priority", ""),
+                    "issue_type": issue.get("issue_type", ""),
+                    "assignee": issue.get("assignee", ""),
+                    "created_at": issue.get("created", "") or issue.get("created_at", ""),
+                    "updated_at": issue.get("updated", "") or issue.get("updated_at", ""),
+                    "due_date": issue.get("due_date", ""),
+                    "urgency_score": issue.get("urgency_score", 0),
+                    "project_key": issue.get("project", {}).get("key", "") if isinstance(issue.get("project"), dict) else issue.get("project_key", "")
+                }
+                jira_data.append(issue_info)
+            
+            context["jira_issues"] = jira_data
+            logger.info(f"[Chat] Loaded {len(jira_data)} JIRA issues for context")
+        except Exception as e:
+            logger.warning(f"[Chat] Error loading JIRA issues: {e}")
+            context["jira_issues"] = []
+        
         # Call AI service with comprehensive context
         response = await ai_service.chat_assistant(
             query=message.query,
@@ -272,6 +300,7 @@ async def analyze_trends(
             logger.info(f"[Trends] Returning cached trends data (age: {time.time() - cached['timestamp']:.1f}s)")
             return TrendAnalysis(**cached["data"])
         
+        # Collect data from all sources for comprehensive trend analysis
         # Get recent meetings with MOM data (reduced limit for faster processing)
         analysis_limit = min(limit, 5)  # Analyze max 5 meetings for faster response
         result = await db.execute(
@@ -281,10 +310,6 @@ async def analyze_trends(
             .limit(analysis_limit)
         )
         meetings = result.scalars().all()
-        
-        if not meetings:
-            logger.info("No meetings with MOM data found for trends analysis")
-            return TrendAnalysis()
         
         # Prepare meeting data and filter out meetings with empty/invalid MOM
         meetings_data = []
@@ -310,12 +335,94 @@ async def analyze_trends(
             }
             meetings_data.append(meeting_dict)
         
-        if not meetings_data:
-            logger.info("No meetings with valid MOM data found for trends analysis")
+        # Fetch emails for trend analysis
+        emails_data = []
+        try:
+            emails = await email_integration.get_outlook_inbox(max_results=20, unread_only=False)
+            for email in emails:
+                email_info = {
+                    "subject": email.get("subject", "No Subject"),
+                    "sender": email.get("sender", "") or email.get("sender_email", ""),
+                    "preview": email.get("body_preview", "") or email.get("body", "")[:500],
+                    "received_at": email.get("received_at", ""),
+                    "importance": email.get("importance", "normal")
+                }
+                emails_data.append(email_info)
+            logger.info(f"[Trends] Loaded {len(emails_data)} emails for trend analysis")
+        except Exception as e:
+            logger.warning(f"[Trends] Error loading emails: {e}")
+        
+        # Fetch Teams messages for trend analysis
+        teams_data = []
+        try:
+            teams_result = await teams_integration.get_chats(max_results=20)
+            teams_messages = teams_result.get("messages", [])
+            for msg in teams_messages:
+                message_info = {
+                    "content": msg.get("body", {}).get("content", "")[:500] if isinstance(msg.get("body"), dict) else str(msg.get("body", ""))[:500],
+                    "sender": msg.get("from", {}).get("user", {}).get("displayName", "") if isinstance(msg.get("from"), dict) else "",
+                    "sent_at": msg.get("createdDateTime", "")
+                }
+                teams_data.append(message_info)
+            logger.info(f"[Trends] Loaded {len(teams_data)} Teams messages for trend analysis")
+        except Exception as e:
+            logger.warning(f"[Trends] Error loading Teams messages: {e}")
+        
+        # Fetch todos for trend analysis
+        todos_data = []
+        try:
+            todos_result = await db.execute(
+                select(TodoItem)
+                .order_by(TodoItem.created_at.desc())
+                .limit(30)
+            )
+            todos = todos_result.scalars().all()
+            for todo in todos:
+                todo_info = {
+                    "title": todo.title,
+                    "description": todo.description or "",
+                    "priority": todo.priority,
+                    "is_completed": todo.is_completed,
+                    "created_at": todo.created_at.isoformat() if todo.created_at else None
+                }
+                todos_data.append(todo_info)
+            logger.info(f"[Trends] Loaded {len(todos_data)} todos for trend analysis")
+        except Exception as e:
+            logger.warning(f"[Trends] Error loading todos: {e}")
+        
+        # Fetch JIRA issues for trend analysis
+        jira_data = []
+        try:
+            jira_issues = await jira_integration.get_assigned_issues(max_results=30)
+            for issue in jira_issues:
+                issue_info = {
+                    "key": issue.get("key", ""),
+                    "summary": issue.get("summary", ""),
+                    "status": issue.get("status", ""),
+                    "priority": issue.get("priority", ""),
+                    "issue_type": issue.get("issue_type", ""),
+                    "created": issue.get("created", ""),
+                    "updated": issue.get("updated", ""),
+                    "due_date": issue.get("due_date", ""),
+                    "urgency_score": issue.get("urgency_score", 0)
+                }
+                jira_data.append(issue_info)
+            logger.info(f"[Trends] Loaded {len(jira_data)} JIRA issues for trend analysis")
+        except Exception as e:
+            logger.warning(f"[Trends] Error loading JIRA issues: {e}")
+        
+        if not meetings_data and not emails_data and not teams_data and not todos_data and not jira_data:
+            logger.info("No data found for trends analysis")
             return TrendAnalysis()
         
-        # Analyze trends
-        trends = await ai_service.analyze_trends(meetings_data)
+        # Analyze trends with all data sources
+        trends = await ai_service.analyze_trends(
+            meetings_data=meetings_data,
+            emails_data=emails_data,
+            teams_data=teams_data,
+            todos_data=todos_data,
+            jira_data=jira_data
+        )
         trends_data = trends if isinstance(trends, dict) else trends.dict() if hasattr(trends, 'dict') else {}
         
         # Cache the result
