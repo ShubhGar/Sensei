@@ -937,22 +937,22 @@ const EmailView = () => {
                               </Box>
                             </Box>
 
-                            {/* Body Preview (Collapsed View) */}
-                            {!isExpanded && hasBodyPreview && (
+                            {/* Body Preview (Collapsed View) - Always show preview */}
+                            {!isExpanded && (
                               <Typography 
                                 variant="body2" 
                                 sx={{ 
                                   color: 'text.secondary',
                                   lineHeight: 1.6,
-                                  display: '-webkit-box',
-                                  WebkitLineClamp: 2,
-                                  WebkitBoxOrient: 'vertical',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
+                                  display: hasBodyPreview ? '-webkit-box' : 'block',
+                                  WebkitLineClamp: hasBodyPreview ? 3 : 'none',
+                                  WebkitBoxOrient: hasBodyPreview ? 'vertical' : 'unset',
+                                  overflow: hasBodyPreview ? 'hidden' : 'visible',
+                                  textOverflow: hasBodyPreview ? 'ellipsis' : 'clip',
                                   mt: 0.5,
                                 }}
                               >
-                                {email.body_preview}
+                                {hasBodyPreview ? email.body_preview : (email.subject || 'No preview available')}
                               </Typography>
                             )}
 
@@ -1153,32 +1153,44 @@ const EmailView = () => {
                                   >
                                     Suggest Reply
                                   </Button>
-                                  <Button
-                                    size="small"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleGenerateTodos(email.id)
-                                    }}
-                                    variant="contained"
-                                    color="primary"
-                                    disabled={generatingTodos.has(email.id)}
-                                    startIcon={generatingTodos.has(email.id) ? <CircularProgress size={16} /> : <AddTaskIcon />}
-                                  >
-                                    {generatingTodos.has(email.id) ? 'Generating...' : 'Generate Todos'}
-                                  </Button>
-                                  <Button
-                                    size="small"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleConvertToJira(email)
-                                    }}
-                                    variant="outlined"
-                                    color="secondary"
-                                    disabled={generatingJiraContent}
-                                    startIcon={generatingJiraContent ? <CircularProgress size={16} /> : <CodeIcon />}
-                                  >
-                                    {generatingJiraContent ? 'Generating...' : 'Convert to JIRA'}
-                                  </Button>
+                                  {(() => {
+                                    // Check if email is just a simple greeting (hide Generate Todos for those)
+                                    const emailText = (email.body_preview || email.subject || '').toLowerCase().trim()
+                                    const isSimpleGreeting = emailText.length < 50 && (
+                                      /^(hi|hello|hey|thanks|thank you|regards|best regards|fyi|for your information)[\s\.,!]*$/i.test(emailText) ||
+                                      /^(hi|hello|hey)[\s\.,!]*$/.test(emailText.split('\n')[0])
+                                    )
+                                    return !isSimpleGreeting ? (
+                                      <Button
+                                        size="small"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          handleGenerateTodos(email.id)
+                                        }}
+                                        variant="contained"
+                                        color="primary"
+                                        disabled={generatingTodos.has(email.id)}
+                                        startIcon={generatingTodos.has(email.id) ? <CircularProgress size={16} /> : <AddTaskIcon />}
+                                      >
+                                        {generatingTodos.has(email.id) ? 'Generating...' : 'Generate Todos'}
+                                      </Button>
+                                    ) : null
+                                  })()}
+                                  {email.needs_jira && (
+                                    <Button
+                                      size="small"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleConvertToJira(email)
+                                      }}
+                                      variant="outlined"
+                                      color="secondary"
+                                      disabled={generatingJiraContent}
+                                      startIcon={generatingJiraContent ? <CircularProgress size={16} /> : <CodeIcon />}
+                                    >
+                                      {generatingJiraContent ? 'Generating...' : 'Convert to JIRA'}
+                                    </Button>
+                                  )}
                                 </Box>
                               </Box>
                             </Collapse>

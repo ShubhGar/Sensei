@@ -762,6 +762,20 @@ async def suggest_teams_response(
         raise HTTPException(status_code=500, detail=f"Error suggesting response: {str(e)}")
 
 
+@router.post("/check-needs-jira")
+async def check_needs_jira(
+    source_type: str = Query(..., description="Source type: 'email' or 'teams'"),
+    content: Dict[str, Any] = Body(..., description="Email or message content")
+):
+    """Check if email or Teams message needs a JIRA ticket"""
+    try:
+        needs_jira = await ai_service.check_needs_jira(source_type, content)
+        return {"needs_jira": needs_jira}
+    except Exception as e:
+        logger.error(f"Error checking if content needs JIRA: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error checking if content needs JIRA: {str(e)}")
+
+
 @router.post("/generate-jira-content")
 async def generate_jira_content(
     source_type: str = Query(..., description="Source type: 'email' or 'teams'"),

@@ -104,18 +104,62 @@ async def get_inbox(
             except (asyncio.TimeoutError, Exception) as e:
                 logger.warning(f"[Email] Error analyzing sentiment for email {email.get('id')}: {e}")
         
-        # Process emails in parallel batches (limit to 5 for performance - reduced from 10)
-        # Only score top 5 most recent emails to avoid timeout
-        emails_to_score = emails[:5]
+        async def check_needs_jira_with_timeout(email, timeout=2.0):
+            """Check if email needs JIRA ticket with timeout"""
+            try:
+                # Get full email content (prefer body over body_preview for better detection)
+                email_body = email.get("body", "") or email.get("body_preview", "") or ""
+                email_subject = email.get("subject", "")
+                
+                # Combine subject and body for better context
+                full_content = f"{email_subject} {email_body}".strip()
+                
+                needs_jira = await asyncio.wait_for(
+                    ai_service.check_needs_jira("email", {
+                        "subject": email_subject,
+                        "sender": email.get("sender", ""),
+                        "body_preview": email_body[:2000],  # Limit to avoid token issues
+                        "content": email_body[:2000]
+                    }),
+                    timeout=timeout
+                )
+                email["needs_jira"] = needs_jira
+                logger.info(f"[Email] JIRA check for email {email.get('id')[:20]}... - needs_jira: {needs_jira}, subject: {email_subject[:50]}")
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"[Email] Error checking if email needs JIRA {email.get('id')}: {e}")
+                # Fallback: do a quick keyword check (but ALWAYS exclude leave requests)
+                email_body = email.get("body", "") or email.get("body_preview", "") or ""
+                email_subject = email.get("subject", "")
+                text = f"{email_subject} {email_body}".lower()
+                
+                # First check for leave request keywords - ALWAYS exclude these
+                leave_keywords = ['leave request', 'leave application', 'vacation', 'time off', 'holiday', 
+                                'sick leave', 'personal leave', 'annual leave', 'casual leave',
+                                'applying for leave', 'requesting leave', 'need leave', 'taking leave',
+                                'leave approval', 'leave balance', 'leave days']
+                if any(leave_keyword in text for leave_keyword in leave_keywords):
+                    email["needs_jira"] = False
+                    logger.info(f"[Email] Fallback JIRA check - excluded (leave request) for email {email.get('id')[:20]}...")
+                else:
+                    # Not a leave request, check for bug/task keywords
+                    fallback_keywords = ['bug', 'issue', 'problem', 'observed', 'seeing', 'multiple', 'fix', 'defect', 'verification']
+                    email["needs_jira"] = any(keyword in text for keyword in fallback_keywords)
+                    logger.info(f"[Email] Fallback JIRA check for email {email.get('id')[:20]}... - needs_jira: {email['needs_jira']}")
+        
+        # Process emails in parallel batches (limit to 10 for better coverage)
+        # Check JIRA needs for more emails (up to 10) to catch important issues
+        emails_to_score = emails[:10]  # Increased from 5 to 10
         if emails_to_score:
             # Score priority in parallel with shorter timeout
             await asyncio.gather(*[score_email_priority_with_timeout(email, timeout=1.5) for email in emails_to_score], return_exceptions=True)
             # Analyze sentiment in parallel if requested
             if include_sentiment:
                 await asyncio.gather(*[analyze_sentiment_with_timeout(email, timeout=1.5) for email in emails_to_score], return_exceptions=True)
+            # Check if emails need JIRA tickets (with longer timeout for better accuracy)
+            await asyncio.gather(*[check_needs_jira_with_timeout(email, timeout=2.0) for email in emails_to_score], return_exceptions=True)
         
-        # For remaining emails, set default priority scores
-        for email in emails[5:]:
+        # For remaining emails, set default priority scores and needs_jira flag
+        for email in emails[10:]:
             if "priority_score" not in email:
                 email["priority_score"] = {
                     "priority_score": 50,
@@ -126,6 +170,8 @@ async def get_inbox(
                     "blocked_on_us": False,
                     "factors": []
                 }
+            if "needs_jira" not in email:
+                email["needs_jira"] = False
         
         summary = await email_integration.analyze_inbox(emails, ai_service)
         

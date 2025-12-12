@@ -34,6 +34,7 @@ import AnalyticsIcon from '@mui/icons-material/Analytics'
 import GroupsIcon from '@mui/icons-material/Groups'
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline'
 import EmailIcon from '@mui/icons-material/Email'
+import AddTaskIcon from '@mui/icons-material/AddTask'
 import { teamsAPI, authAPI, aiAPI } from '../services/api'
 import SendIcon from '@mui/icons-material/Send'
 import CodeIcon from '@mui/icons-material/Code'
@@ -69,6 +70,7 @@ const TeamsView = () => {
   const [jiraDialogOpen, setJiraDialogOpen] = useState(false)
   const [jiraDialogText, setJiraDialogText] = useState('')
   const [generatingJiraContent, setGeneratingJiraContent] = useState(new Set())
+  const [generatingTodos, setGeneratingTodos] = useState(new Set())
   
   // Set nav tab based on current route
   const getNavTab = useCallback(() => {
@@ -305,6 +307,30 @@ const TeamsView = () => {
         content: suggestedResponse.suggested_response
       }
     })
+  }
+
+  const handleGenerateTodos = async (message) => {
+    const messageId = message.message_id || message.id || Math.random().toString()
+    setGeneratingTodos(prev => new Set(prev).add(messageId))
+    setError(null)
+    
+    try {
+      const response = await teamsAPI.generateTodos(messageId)
+      setError(null)
+      alert(`Successfully created ${response.data.length} todo(s) from Teams message!`)
+      // Optionally refresh the page or update UI
+    } catch (err) {
+      const errorMsg = err.response?.data?.detail || err.message || 'Failed to generate todos'
+      setError('Failed to generate todos: ' + errorMsg)
+      alert(`Error: ${errorMsg}`)
+      console.error('[TeamsView] Error generating todos:', err)
+    } finally {
+      setGeneratingTodos(prev => {
+        const next = new Set(prev)
+        next.delete(messageId)
+        return next
+      })
+    }
   }
 
   const handleConvertToJira = async (message) => {
@@ -826,9 +852,11 @@ const TeamsView = () => {
                             mt: 1,
                             color: 'text.primary',
                             lineHeight: 1.6,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
                           }}
                         >
-                          {message.content}
+                          {message.content || 'No content available'}
                         </Typography>
                         {message.summary && (
                           <Typography 
@@ -854,6 +882,19 @@ const TeamsView = () => {
                             {new Date(message.sent_at).toLocaleString()}
                           </Typography>
                         )}
+                        {/* Show message details if available */}
+                        {message.channel_id && (
+                          <Typography 
+                            variant="caption" 
+                            color="text.secondary"
+                            sx={{ 
+                              mt: 0.5,
+                              display: 'block',
+                            }}
+                          >
+                            Channel: {message.channel_id}
+                          </Typography>
+                        )}
                         <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
                           <Button
                             size="small"
@@ -866,19 +907,44 @@ const TeamsView = () => {
                           >
                             Suggest Response
                           </Button>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            color="secondary"
-                            disabled={generatingJiraContent.has(message.message_id || message.id || '')}
-                            startIcon={generatingJiraContent.has(message.message_id || message.id || '') ? <CircularProgress size={16} /> : <CodeIcon />}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleConvertToJira(message)
-                            }}
-                          >
-                            {generatingJiraContent.has(message.message_id || message.id || '') ? 'Generating...' : 'Convert to JIRA'}
-                          </Button>
+                          {(() => {
+                            // Check if message is just a simple greeting (hide Generate Todos for those)
+                            const messageText = (message.content || '').toLowerCase().trim()
+                            const isSimpleGreeting = messageText.length < 50 && (
+                              /^(hi|hello|hey|thanks|thank you|regards|best regards|fyi|for your information)[\s\.,!]*$/i.test(messageText) ||
+                              /^(hi|hello|hey)[\s\.,!]*$/.test(messageText.split('\n')[0])
+                            )
+                            return !isSimpleGreeting ? (
+                              <Button
+                                size="small"
+                                variant="contained"
+                                color="primary"
+                                disabled={generatingTodos.has(message.message_id || message.id || '')}
+                                startIcon={generatingTodos.has(message.message_id || message.id || '') ? <CircularProgress size={16} /> : <AddTaskIcon />}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleGenerateTodos(message)
+                                }}
+                              >
+                                {generatingTodos.has(message.message_id || message.id || '') ? 'Generating...' : 'Generate Todos'}
+                              </Button>
+                            ) : null
+                          })()}
+                          {message.needs_jira && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="secondary"
+                              disabled={generatingJiraContent.has(message.message_id || message.id || '')}
+                              startIcon={generatingJiraContent.has(message.message_id || message.id || '') ? <CircularProgress size={16} /> : <CodeIcon />}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleConvertToJira(message)
+                              }}
+                            >
+                              {generatingJiraContent.has(message.message_id || message.id || '') ? 'Generating...' : 'Convert to JIRA'}
+                            </Button>
+                          )}
                         </Box>
                       </Box>
                     }

@@ -40,14 +40,14 @@ const CommunicationsView = () => {
   const getNavTab = useCallback(() => {
     if (location.pathname === '/email') return 'email'
     if (location.pathname === '/teams') return 'teams'
-    if (location.pathname === '/communications') return 'communications'
-    return 'communications'
+    if (location.pathname === '/communications') return 'email' // Default to email tab
+    return 'email' // Default to email tab
   }, [location.pathname])
   const [navTab, setNavTab] = useState(() => {
     if (location.pathname === '/email') return 'email'
     if (location.pathname === '/teams') return 'teams'
-    if (location.pathname === '/communications') return 'communications'
-    return 'communications'
+    if (location.pathname === '/communications') return 'email' // Default to email tab
+    return 'email' // Default to email tab
   })
   
   // Theme-aware card background

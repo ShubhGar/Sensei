@@ -1,15 +1,19 @@
 """
 Teams API routes
 """
-from fastapi import APIRouter, HTTPException, Query
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from typing import Optional, List
 import logging
 import time
 import asyncio
 
-from app.models.schemas import TeamsSummary, SendTeamsMessageRequest, SendTeamsMessageResponse
+from app.models.schemas import TeamsSummary, SendTeamsMessageRequest, SendTeamsMessageResponse, TodoItemResponse
 from app.integrations.teams_integration import TeamsIntegration
 from app.services.ai_service import AIService
+from app.database import get_db, TodoItem
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -136,14 +140,49 @@ async def get_messages(
                     "factors": []
                 }
         
-        # Process messages in parallel batches (limit to 5 for performance - reduced from 10)
-        # Only score top 5 most recent messages to avoid timeout
-        messages_to_score = messages[:5]
+        async def check_needs_jira_with_timeout(message, timeout=2.0):
+            """Check if Teams message needs JIRA ticket with timeout"""
+            try:
+                message_content = message.get("content", "") or ""
+                needs_jira = await asyncio.wait_for(
+                    ai_service.check_needs_jira("teams", {
+                        "sender": message.get("sender", ""),
+                        "content": message_content[:2000],  # Limit to avoid token issues
+                        "sent_at": message.get("sent_at")
+                    }),
+                    timeout=timeout
+                )
+                message["needs_jira"] = needs_jira
+                logger.info(f"[Teams] JIRA check for message {message.get('message_id', 'unknown')[:20]}... - needs_jira: {needs_jira}")
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"[Teams] Error checking if message needs JIRA {message.get('message_id')}: {e}")
+                # Fallback: do a quick keyword check (but ALWAYS exclude leave requests)
+                message_content = message.get("content", "").lower()
+                
+                # First check for leave request keywords - ALWAYS exclude these
+                leave_keywords = ['leave request', 'leave application', 'vacation', 'time off', 'holiday', 
+                                'sick leave', 'personal leave', 'annual leave', 'casual leave',
+                                'applying for leave', 'requesting leave', 'need leave', 'taking leave',
+                                'leave approval', 'leave balance', 'leave days']
+                if any(leave_keyword in message_content for leave_keyword in leave_keywords):
+                    message["needs_jira"] = False
+                    logger.info(f"[Teams] Fallback JIRA check - excluded (leave request) for message {message.get('message_id', 'unknown')[:20]}...")
+                else:
+                    # Not a leave request, check for bug/task keywords
+                    fallback_keywords = ['bug', 'issue', 'problem', 'observed', 'seeing', 'multiple', 'fix', 'defect', 'verification']
+                    message["needs_jira"] = any(keyword in message_content for keyword in fallback_keywords)
+                    logger.info(f"[Teams] Fallback JIRA check for message {message.get('message_id', 'unknown')[:20]}... - needs_jira: {message['needs_jira']}")
+        
+        # Process messages in parallel batches (limit to 10 for better coverage)
+        # Check JIRA needs for more messages (up to 10) to catch important issues
+        messages_to_score = messages[:10]  # Increased from 5 to 10
         if messages_to_score:
             await asyncio.gather(*[score_message_priority_with_timeout(message, timeout=1.5) for message in messages_to_score], return_exceptions=True)
+            # Check if messages need JIRA tickets (with longer timeout for better accuracy)
+            await asyncio.gather(*[check_needs_jira_with_timeout(message, timeout=2.0) for message in messages_to_score], return_exceptions=True)
         
-        # For remaining messages, set default priority scores
-        for message in messages[5:]:
+        # For remaining messages, set default priority scores and needs_jira flag
+        for message in messages[10:]:
             if "priority_score" not in message:
                 message["priority_score"] = {
                     "priority_score": 50,
@@ -154,6 +193,8 @@ async def get_messages(
                     "blocked_on_us": False,
                     "factors": []
                 }
+            if "needs_jira" not in message:
+                message["needs_jira"] = False
         
         # If dummy data is being used, log it
         if is_dummy_data:
@@ -365,5 +406,93 @@ async def send_teams_message(request: SendTeamsMessageRequest):
     except Exception as e:
         logger.error(f"[Teams] Error sending message: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error sending message: {str(e)}")
+
+
+@router.post("/generate-todos/{message_id}", response_model=List[TodoItemResponse])
+async def generate_todos_from_teams_message(
+    message_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate AI-powered todos from a Teams message"""
+    try:
+        logger.info(f"[Teams] Generating todos from Teams message: {message_id}")
+        
+        # Fetch Teams messages to find the specific message
+        teams_result = await teams_integration.get_chats(max_results=100)
+        messages = teams_result.get("messages", [])
+        message = next((m for m in messages if (m.get("id") == message_id or m.get("message_id") == message_id)), None)
+        
+        if not message:
+            raise HTTPException(status_code=404, detail="Teams message not found")
+        
+        # Extract message content
+        content = message.get("content", "") or message.get("body", {}).get("content", "") if isinstance(message.get("body"), dict) else str(message.get("body", ""))
+        sender = message.get("sender", "") or (message.get("from", {}).get("user", {}).get("displayName", "") if isinstance(message.get("from"), dict) else "")
+        
+        if not content:
+            raise HTTPException(status_code=400, detail="Message has no content")
+        
+        # Generate todos using AI (similar to email todos generation)
+        todos_data = await ai_service.generate_todos_from_email(
+            email_subject=f"Teams message from {sender}",
+            email_body=content,
+            email_priority="MEDIUM"  # Default priority for Teams messages
+        )
+        
+        if not todos_data:
+            return []
+        
+        # Create todos in database
+        created_todos = []
+        for todo_data in todos_data:
+            # Get the maximum order value for todos with the same priority
+            priority = todo_data.get("priority", "medium").upper()
+            result = await db.execute(
+                select(TodoItem).where(TodoItem.priority == priority)
+            )
+            todos_with_priority = result.scalars().all()
+            max_order = max([t.order for t in todos_with_priority if t.order is not None], default=-1.0)
+            new_order = max_order + 1.0
+            
+            db_todo = TodoItem(
+                title=todo_data.get("title", "Untitled Todo"),
+                description=todo_data.get("description", ""),
+                priority=priority,
+                order=new_order,
+                source_type="teams",
+                source_id=message_id,
+                source_data={
+                    "sender": sender,
+                    "content": content[:500],
+                    "sent_at": message.get("sent_at") or message.get("createdDateTime")
+                },
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(db_todo)
+            created_todos.append(db_todo)
+        
+        await db.commit()
+        
+        # Refresh todos to get IDs
+        for todo in created_todos:
+            await db.refresh(todo)
+        
+        logger.info(f"[Teams] Successfully created {len(created_todos)} todos from Teams message")
+        
+        return [TodoItemResponse(
+            id=todo.id,
+            title=todo.title,
+            description=todo.description,
+            priority=todo.priority,
+            is_completed=todo.is_completed,
+            source_type=todo.source_type,
+            created_at=todo.created_at.isoformat() if todo.created_at else None
+        ) for todo in created_todos]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Teams] Error generating todos from Teams message: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating todos: {str(e)}")
 
 

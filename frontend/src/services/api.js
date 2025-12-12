@@ -239,7 +239,9 @@ export const teamsAPI = {
       channel_id: channelId,
       content,
       content_type: contentType
-    })
+    }),
+  generateTodos: (messageId) =>
+    api.post(`/api/teams/generate-todos/${messageId}`)
 }
 
 // Authentication API

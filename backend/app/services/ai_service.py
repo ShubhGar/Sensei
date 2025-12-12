@@ -2177,6 +2177,175 @@ Return JSON:
                 "confidence": 0.0
             }
     
+    async def check_needs_jira(
+        self,
+        source_type: str,
+        content: Dict[str, Any]
+    ) -> bool:
+        """Check if email or Teams message content needs a JIRA ticket created"""
+        if not self.provider_manager.has_any_provider():
+            # Fallback: simple keyword-based check
+            text = ""
+            if source_type == "email":
+                text = f"{content.get('subject', '')} {content.get('body_preview', content.get('content', ''))}"
+            else:  # teams
+                text = content.get('content', '')
+            
+            # Simple keyword check for task-related content
+            # First check for exclusion keywords (leave requests, greetings, etc.)
+            exclusion_keywords = [
+                'leave request', 'leave application', 'vacation', 'time off', 'holiday',
+                'sick leave', 'personal leave', 'annual leave', 'casual leave',
+                'applying for leave', 'requesting leave', 'need leave', 'taking leave',
+                'leave approval', 'leave balance', 'leave days', 'leave policy',
+                'hi', 'hello', 'hey', 'thanks', 'thank you', 'regards', 'best regards',
+                'fyi', 'for your information', 'just to inform', 'just informing',
+                'meeting invite', 'meeting invitation', 'calendar invite'
+            ]
+            text_lower = text.lower()
+            
+            # If it's clearly a leave request, ALWAYS return False (even if it mentions bug)
+            # Check for leave-related keywords more strictly
+            leave_keywords = ['leave request', 'leave application', 'vacation', 'time off', 'holiday',
+                              'sick leave', 'personal leave', 'annual leave', 'casual leave',
+                              'applying for leave', 'requesting leave', 'need leave', 'taking leave',
+                              'leave approval', 'leave balance', 'leave days', 'applying leave',
+                              'request leave', 'approve leave']
+            # Check if any leave keyword appears (case-insensitive)
+            if any(leave_keyword in text_lower for leave_keyword in leave_keywords):
+                return False
+            # Additional check: if the word "leave" appears with context words
+            if 'leave' in text_lower:
+                leave_context_words = ['request', 'application', 'approval', 'balance', 'days', 'taking', 'applying', 'requesting', 'need', 'vacation', 'holiday', 'sick', 'personal', 'annual', 'casual']
+                if any(context_word in text_lower for context_word in leave_context_words):
+                    return False
+            
+            # If it's clearly a simple greeting, return False
+            greeting_keywords = ['hi', 'hello', 'hey', 'thanks', 'thank you', 'regards', 'best regards']
+            if any(exclusion in text_lower for exclusion in exclusion_keywords):
+                # But allow if it's also a bug report (e.g., "hi, we have a bug")
+                if not any(keyword in text_lower for keyword in ['bug', 'issue', 'problem', 'defect', 'fix', 'error', 'broken']):
+                    return False
+            
+            # Expanded keywords to catch task-related phrases
+            task_keywords = [
+                'bug', 'issue', 'task', 'feature', 'requirement', 'defect', 'problem', 
+                'fix', 'implement', 'develop', 'create', 'build', 'work item', 'ticket',
+                'need to fix', 'need to', 'take a look', 'can you', 'please fix', 'fix the',
+                'production bug', 'production issue', 'sdk', 'checkout', 'checkoutpro',
+                'observed', 'seeing', 'multiple', 'overlay', 'verification', 'calling multiple times',
+                'screen getting loaded', 'notification', 'hinge', 'attached', 'reference'
+            ]
+            
+            # Check for exact keyword matches and also phrase matches
+            # Also check for bug report patterns
+            has_bug_keywords = any(keyword in text_lower for keyword in task_keywords)
+            has_bug_patterns = (
+                'fix' in text_lower and ('bug' in text_lower or 'issue' in text_lower or 'problem' in text_lower) or
+                'need' in text_lower and ('fix' in text_lower or 'look' in text_lower) or
+                ('observed' in text_lower or 'seeing' in text_lower) and ('multiple' in text_lower or 'issue' in text_lower or 'problem' in text_lower) or
+                'calling multiple times' in text_lower or
+                'multiple screen' in text_lower or
+                'multiple overlay' in text_lower or
+                ('attached' in text_lower and ('video' in text_lower or 'reference' in text_lower or 'sample' in text_lower))
+            )
+            return has_bug_keywords or has_bug_patterns
+        
+        if source_type == "email":
+            prompt = f"""Analyze this email and determine if it requires creating a JIRA ticket. 
+An email needs a JIRA ticket if it contains:
+- Bug reports or defect descriptions
+- Feature requests or new requirements
+- Task assignments or work items
+- Technical issues that need tracking
+- Development work requests
+- Problems that need to be tracked and resolved
+
+DO NOT create JIRA tickets for:
+- General questions or information requests
+- Meeting invitations or scheduling
+- Status updates or notifications
+- Casual conversations
+- Thank you messages or acknowledgments
+- Newsletter or marketing emails
+
+Email Subject: {content.get('subject', 'No Subject')}
+From: {content.get('sender', 'Unknown')}
+Content: {content.get('body_preview', content.get('content', ''))[:2000]}
+
+IMPORTANT: An email DEFINITELY needs a JIRA ticket if it contains ANY of the following:
+- Bug reports: "observed", "seeing", "issue", "problem", "bug", "defect"
+- Technical issues: "multiple screen", "overlay", "calling multiple times", "verification issue"
+- Problem descriptions: "we had observed", "we are seeing", "our hinge is that"
+- Attachments/references: "attached", "video", "sample", "reference" (especially with bug descriptions)
+- Requests for investigation: "can you take a look", "need to fix", "please investigate"
+- Development work: SDK, API, code, platform integration issues
+- Production issues: "production bug", "production issue", "live issue"
+
+DO NOT create JIRA tickets for:
+- General questions or information requests
+- Meeting invitations or scheduling
+- Status updates or notifications
+- Casual conversations
+- Thank you messages or acknowledgments
+- Newsletter or marketing emails
+
+Return JSON:
+{{
+    "needs_jira": true/false,
+    "reasoning": "brief explanation why it does or doesn't need a JIRA ticket",
+    "issue_type": "Bug|Task|Story|Epic" (if needs_jira is true, otherwise null)
+}}"""
+        else:  # teams message
+            prompt = f"""Analyze this Teams message and determine if it requires creating a JIRA ticket.
+A message needs a JIRA ticket if it contains:
+- Bug reports or defect descriptions
+- Feature requests or new requirements
+- Task assignments or work items
+- Technical issues that need tracking
+- Development work requests
+- Problems that need to be tracked and resolved
+
+DO NOT create JIRA tickets for:
+- General questions or information requests
+- Casual chat or greetings
+- Status updates or acknowledgments
+- Quick clarifications
+
+From: {content.get('sender', 'Unknown')}
+Content: {content.get('content', '')[:2000]}
+
+Return JSON:
+{{
+    "needs_jira": true/false,
+    "reasoning": "brief explanation why it does or doesn't need a JIRA ticket",
+    "issue_type": "Bug|Task|Story|Epic" (if needs_jira is true, otherwise null)
+}}"""
+
+        system_prompt = "You are an expert at determining when work items need to be tracked in JIRA."
+
+        try:
+            result = await self._call_ai(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.2,
+                max_tokens=256,
+                response_format={"type": "json_object"}
+            )
+            
+            parsed = self._parse_json_response(result)
+            return parsed.get("needs_jira", False)
+        except Exception as e:
+            logger.warning(f"Error checking if content needs JIRA: {e}")
+            # Fallback to keyword-based check
+            text = ""
+            if source_type == "email":
+                text = f"{content.get('subject', '')} {content.get('body_preview', content.get('content', ''))}"
+            else:
+                text = content.get('content', '')
+            task_keywords = ['bug', 'issue', 'task', 'feature', 'requirement', 'defect', 'problem', 'fix', 'implement', 'develop', 'create', 'build', 'work item', 'ticket']
+            return any(keyword in text.lower() for keyword in task_keywords)
+    
     async def generate_jira_content(
         self,
         source_type: str,

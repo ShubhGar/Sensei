@@ -170,6 +170,54 @@ def generate_dummy_teams_chats(max_results: int = 50) -> List[Dict[str, Any]]:
             "is_read": True
         },
         {
+            "chat_id": "dummy-chat-greeting-1",
+            "message_id": "dummy-msg-greet-1",
+            "sender": "Neha Kapoor",
+            "content": "Hi team!",
+            "sent_at": (datetime.now() - timedelta(minutes=20)).isoformat(),
+            "is_read": True
+        },
+        {
+            "chat_id": "dummy-chat-greeting-2",
+            "message_id": "dummy-msg-greet-2",
+            "sender": "Rohit Verma",
+            "content": "Hello everyone 👋",
+            "sent_at": (datetime.now() - timedelta(minutes=15)).isoformat(),
+            "is_read": True
+        },
+        {
+            "chat_id": "dummy-chat-greeting-3",
+            "message_id": "dummy-msg-greet-3",
+            "sender": "Sneha Desai",
+            "content": "Hey!",
+            "sent_at": (datetime.now() - timedelta(minutes=10)).isoformat(),
+            "is_read": True
+        },
+        {
+            "chat_id": "dummy-chat-greeting-4",
+            "message_id": "dummy-msg-greet-4",
+            "sender": "Amit Joshi",
+            "content": "Thanks!",
+            "sent_at": (datetime.now() - timedelta(minutes=5)).isoformat(),
+            "is_read": True
+        },
+        {
+            "chat_id": "dummy-chat-greeting-5",
+            "message_id": "dummy-msg-greet-5",
+            "sender": "Deepika Nair",
+            "content": "Thank you!",
+            "sent_at": (datetime.now() - timedelta(minutes=3)).isoformat(),
+            "is_read": True
+        },
+        {
+            "chat_id": "dummy-chat-greeting-6",
+            "message_id": "dummy-msg-greet-6",
+            "sender": "Karan Malhotra",
+            "content": "Hi",
+            "sent_at": (datetime.now() - timedelta(minutes=2)).isoformat(),
+            "is_read": True
+        },
+        {
             "chat_id": "dummy-chat-2",
             "message_id": "dummy-msg-3",
             "sender": "Anjali Patel",
