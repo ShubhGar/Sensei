@@ -105,13 +105,30 @@ const OldMeetingsView = () => {
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A'
     try {
-      const date = new Date(dateString)
-      return date.toLocaleString('en-US', {
+      // Ensure UTC dates are properly parsed and converted to local timezone
+      let date
+      if (typeof dateString === 'string') {
+        // If it's an ISO string without timezone, assume UTC
+        if (dateString.endsWith('Z')) {
+          date = new Date(dateString)
+        } else if (dateString.includes('T') && !dateString.includes('+') && !dateString.includes('Z')) {
+          // ISO format without timezone - assume UTC
+          date = new Date(dateString + 'Z')
+        } else {
+          date = new Date(dateString)
+        }
+      } else {
+        date = new Date(dateString)
+      }
+      
+      // Use machine's local timezone for display
+      return date.toLocaleString(undefined, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
-        minute: '2-digit'
+        minute: '2-digit',
+        timeZoneName: 'short'
       })
     } catch {
       return dateString

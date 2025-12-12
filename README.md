@@ -305,7 +305,10 @@ Copy `.env.example` to `.env` and configure the following:
 #### Optional
 - `DEEPGRAM_API_KEY` - Deepgram API key for cloud transcription (defaults to local Whisper)
 - `USE_DEEPGRAM` - Set to `"true"` to use Deepgram instead of local Whisper
-- `LOCAL_WHISPER_MODEL` - Whisper model size: `base`, `small`, `medium`, `large` (default: `base`)
+- `LOCAL_WHISPER_MODEL` - Whisper model name (default: `distil-small.en`)
+  - Options: `distil-small.en` (fastest), `small.en`, `base.en`, `medium.en`, `large-v3.en`
+  - Or without `.en` suffix: `small`, `medium`, `large-v3` (supports multiple languages)
+  - Models with `.en` suffix are English-only and faster
 - `OPENAI_MODEL` - OpenAI model to use (default: `gpt-4o`)
 - `OPENAI_FALLBACK_MODEL` - Fallback OpenAI model if primary model is unavailable (default: `gpt-3.5-turbo`)
 

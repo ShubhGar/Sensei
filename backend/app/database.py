@@ -4,7 +4,7 @@ Database models and initialization
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import Column, String, DateTime, Boolean, Text, Integer, JSON, Float
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from dotenv import load_dotenv
 
@@ -19,7 +19,7 @@ class MeetingSession(Base):
     
     id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     ended_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
     transcript = Column(Text, nullable=True)
@@ -40,8 +40,8 @@ class MicrosoftAuth(Base):
     refresh_token = Column(Text, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     token_type = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=lambda: datetime.utcnow())
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class TodoItem(Base):
@@ -57,8 +57,8 @@ class TodoItem(Base):
     source_type = Column(String, nullable=True)  # email, teams, meeting, action_item, etc.
     source_id = Column(String, nullable=True)  # ID of the source item
     source_data = Column(JSON, nullable=True)  # Additional context about the source
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=lambda: datetime.utcnow())
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime, nullable=True)
 
 

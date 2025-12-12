@@ -8,7 +8,7 @@ import uuid
 import json
 import base64
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional
 import logging
 import time
@@ -123,7 +123,7 @@ async def start_session(
     """Start a new transcription session - only stored in memory until insights are generated"""
     session_id = str(uuid.uuid4())
     title = request.title or "Untitled Meeting"
-    started_at = datetime.utcnow()
+    started_at = datetime.now(timezone.utc)
     
     logger.info(f"[Transcription] Starting session {session_id} with title: {title} (memory only)")
     
@@ -190,7 +190,7 @@ async def stop_session(
             if session:
                 try:
                     session.is_active = False
-                    session.ended_at = datetime.utcnow()
+                    session.ended_at = datetime.now(timezone.utc)
                     session.full_transcript = merged_transcript
                     session.transcript = active_data.get("transcript_buffer", "")
                     await db.commit()
@@ -218,7 +218,7 @@ async def stop_session(
                 # Session exists in DB but not in memory - mark as inactive
                 try:
                     session.is_active = False
-                    session.ended_at = datetime.utcnow()
+                    session.ended_at = datetime.now(timezone.utc)
                     await db.commit()
                 except Exception as e:
                     await db.rollback()
@@ -258,7 +258,7 @@ async def get_session(
             return MeetingSessionResponse(
                 id=session_obj.get("id", session_id),
                 title=session_obj.get("title", "Untitled Meeting"),
-                started_at=session_obj.get("started_at", datetime.utcnow()),
+                started_at=session_obj.get("started_at", datetime.now(timezone.utc)),
                 ended_at=None,
                 is_active=session_obj.get("is_active", True),
                 transcript=active_data.get("transcript_buffer", "")
@@ -302,7 +302,7 @@ async def get_session_details(
             return MeetingDetailsResponse(
                 id=session_obj.get("id", session_id),
                 title=session_obj.get("title", "Untitled Meeting"),
-                started_at=session_obj.get("started_at", datetime.utcnow()),
+                started_at=session_obj.get("started_at", datetime.now(timezone.utc)),
                 ended_at=None,
                 is_active=session_obj.get("is_active", True),
                 transcript=active_data.get("transcript_buffer", ""),
@@ -424,8 +424,8 @@ async def list_meetings(
                 meeting_data = {
                     "id": session.id,
                     "title": session.title,
-                    "started_at": session.started_at.isoformat() if session.started_at else None,
-                    "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                    "started_at": session.started_at.isoformat() + 'Z' if session.started_at else None,
+                    "ended_at": session.ended_at.isoformat() + 'Z' if session.ended_at else None,
                     "is_active": session.is_active,
                     "transcript": session.transcript or "",
                     "full_transcript": session.full_transcript or "",
