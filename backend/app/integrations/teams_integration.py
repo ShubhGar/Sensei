@@ -2,6 +2,7 @@
 Microsoft Teams integration
 """
 import os
+import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
@@ -615,17 +616,47 @@ class TeamsIntegration:
         ai_service
     ) -> Dict[str, Any]:
         """Analyze Teams messages for urgency and action items"""
-        urgent_keywords = ["urgent", "asap", "immediate", "deadline", "action", "blocking"]
-        
         urgent_messages = []
         
+        # More specific urgent patterns with word boundaries and context
+        # Patterns that indicate true urgency (removed "action" as it's too broad)
+        urgent_patterns = [
+            r'\b(urgent|asap|as soon as possible)\b',  # Explicit urgency markers
+            r'\b(immediate|immediately)\s+(action|response|attention|need|help)\b',  # Immediate action required
+            r'\b(deadline|due)\s+(today|tomorrow|in\s+\d+\s+(hour|minute|day)s?)\b',  # Time-sensitive deadlines
+            r'\b(critical|emergency|emergency)\b',  # Critical situations
+            r'\b(blocking|blocker|blocked)\b',  # Blocking issues
+            r'\b(escalat|escalation)\b',  # Escalations
+            r'\b(time\s+)?sensitive\b',  # Time sensitive
+            r'\b@\w+\s+(urgent|asap|immediate|critical)\b',  # @mentions with urgency
+        ]
+        
+        # Negation patterns that should exclude matches
+        negation_patterns = [
+            r'\b(not|no|non|without|doesn\'t|don\'t|isn\'t|aren\'t)\s+(urgent|asap|immediate|critical)\b',
+            r'\b(not\s+)?(urgent|asap|immediate|critical)\s+(not|anymore|yet)\b',
+        ]
+        
         for msg in messages:
-            content_lower = msg.get("content", "").lower()
-            is_urgent = any(keyword in content_lower for keyword in urgent_keywords)
+            content = msg.get("content", "").lower()
             
+            # Check for negations first (if negation found, skip keyword matching)
+            has_negation = any(re.search(pattern, content, re.IGNORECASE) for pattern in negation_patterns)
+            
+            # Determine urgency (only check if no negation)
+            is_urgent = False
+            if not has_negation:
+                for pattern in urgent_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        is_urgent = True
+                        break
+            
+            # Set flag
             if is_urgent:
                 msg["is_urgent"] = True
                 urgent_messages.append(msg)
+            else:
+                msg["is_urgent"] = False
         
         # Skip individual message summaries - too slow and not needed for summary view
         # Individual summaries can be generated on-demand if needed

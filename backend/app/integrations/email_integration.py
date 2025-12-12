@@ -238,24 +238,80 @@ class EmailIntegration:
         ai_service
     ) -> Dict[str, Any]:
         """Analyze inbox emails for urgency and categorization"""
-        urgent_keywords = ["urgent", "asap", "immediate", "deadline", "action required", "important"]
-        approval_keywords = ["approve", "approval", "sign", "review", "confirm"]
-        
         urgent_emails = []
         pending_approvals = []
         
+        # More specific urgent patterns with word boundaries and context
+        # Patterns that indicate true urgency
+        urgent_patterns = [
+            r'\b(urgent|asap|as soon as possible)\b',  # Explicit urgency markers
+            r'\b(immediate|immediately)\s+(action|response|attention|need)\b',  # Immediate action required
+            r'\b(deadline|due)\s+(today|tomorrow|in\s+\d+\s+(hour|minute|day)s?)\b',  # Time-sensitive deadlines
+            r'\b(critical|emergency|emergency)\b',  # Critical situations
+            r'\b(blocking|blocker|blocked)\b',  # Blocking issues
+            r'\b(escalat|escalation)\b',  # Escalations
+            r'\b(time\s+)?sensitive\b',  # Time sensitive
+        ]
+        
+        # Patterns that indicate approval needs (more specific)
+        approval_patterns = [
+            r'\b(need|needs|require|requires|requesting|request)\s+(your\s+)?(approval|signature|sign|sign-off)\b',
+            r'\b(please|kindly)\s+(approve|sign|review\s+and\s+approve|confirm)\b',
+            r'\b(pending|awaiting|waiting\s+for)\s+(your\s+)?(approval|signature|sign-off|confirmation)\b',
+            r'\b(approval|signature|sign-off)\s+(required|needed|requested)\b',
+            r'\b(need|needs)\s+to\s+be\s+(approved|signed|confirmed)\b',
+        ]
+        
+        # Negation patterns that should exclude matches
+        negation_patterns = [
+            r'\b(not|no|non|without|doesn\'t|don\'t|isn\'t|aren\'t)\s+(urgent|asap|immediate|critical|approval|signature)\b',
+            r'\b(not\s+)?(urgent|asap|immediate|critical|approval|signature)\s+(not|anymore|yet)\b',
+        ]
+        
         for email in emails:
-            content_lower = (email.get("subject", "") + " " + email.get("body", "")).lower()
-            is_urgent = any(keyword in content_lower for keyword in urgent_keywords)
-            needs_approval = any(keyword in content_lower for keyword in approval_keywords)
+            subject = email.get("subject", "")
+            body = email.get("body", "")
+            content = f"{subject} {body}".lower()
             
+            # Check Microsoft's importance field first (most reliable)
+            importance = email.get("importance", "normal")
+            is_urgent_from_importance = importance == "high"
+            
+            # Check for negations first (if negation found, skip keyword matching)
+            has_negation = any(re.search(pattern, content, re.IGNORECASE) for pattern in negation_patterns)
+            
+            # Determine urgency
+            is_urgent = False
+            if is_urgent_from_importance:
+                # High importance from Microsoft is a strong signal
+                is_urgent = True
+            elif not has_negation:
+                # Check urgent patterns only if no negation found
+                for pattern in urgent_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        is_urgent = True
+                        break
+            
+            # Determine approval needs (only check if no negation)
+            needs_approval = False
+            if not has_negation:
+                for pattern in approval_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        needs_approval = True
+                        break
+            
+            # Set flags
             if is_urgent:
                 email["is_urgent"] = True
                 urgent_emails.append(email)
+            else:
+                email["is_urgent"] = False
             
             if needs_approval:
                 email["needs_approval"] = True
                 pending_approvals.append(email)
+            else:
+                email["needs_approval"] = False
         
         # Generate mailbox summary - use fast fallback instead of slow AI call for better performance
         # AI summary can be generated on-demand if needed
